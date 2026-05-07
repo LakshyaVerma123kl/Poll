@@ -41,10 +41,10 @@ export default function Dashboard() {
   const domesticMatches = sortMatches(matches.filter(m => m.category === 'domestic'));
 
   const tabs = [
-    { id: 'ipl', label: '🏏 IPL', icon: '🏏' },
-    { id: 'icc', label: '🌍 ICC', icon: '🌍' },
-    { id: 'domestic', label: '🏟️ Domestic', icon: '🏟️' },
-    { id: 'leaderboard', label: '🏆 Board', icon: '🏆' },
+    { id: 'ipl', label: '🏏 IPL', count: iplMatches.length },
+    { id: 'icc', label: '🌍 ICC', count: t20Matches.length + odiMatches.length + testMatches.length },
+    { id: 'domestic', label: '🏟️ Domestic', count: domesticMatches.length },
+    { id: 'leaderboard', label: '🏆 Board', count: null },
   ];
 
   const [iplSubTab, setIplSubTab] = useState('schedule');
@@ -135,6 +135,9 @@ export default function Dashboard() {
                 />
               )}
               {tab.label}
+              {tab.count !== null && tab.count > 0 && (
+                <span className="match-count">{tab.count}</span>
+              )}
             </div>
           ))}
         </motion.div>
@@ -347,6 +350,12 @@ export default function Dashboard() {
           </AnimatePresence>
         </div>
       </main>
+
+      <footer className="app-footer">
+        <span className="shimmer-text" style={{ fontFamily: 'var(--font-heading)', fontWeight: 600 }}>PredictX Arena</span>
+        <span style={{ margin: '0 6px' }}>•</span>
+        Built with 🏏 for Cricket Fans
+      </footer>
     </motion.div>
   );
 }

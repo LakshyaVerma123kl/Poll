@@ -10,16 +10,14 @@ export default function MatchCard({ match }) {
   
   const userVote = votes[match.id]?.[currentUser?.id];
   const isCompleted = match.status === 'completed';
+  const isLive = match.status === 'live';
   const hasWinner = isCompleted && match.winner;
   
   // Confetti trigger when match completes and user won
   useEffect(() => {
     if (hasWinner && userVote) {
-      // Check if user voted for the winning team
       if (userVote.toLowerCase() === match.winner.toLowerCase() || 
           match.winner.toLowerCase().includes(userVote.toLowerCase())) {
-        
-        // Use a flag to ensure we only confetti once per match load
         const confettiKey = `confetti_${match.id}`;
         if (!sessionStorage.getItem(confettiKey)) {
           confetti({
@@ -35,7 +33,6 @@ export default function MatchCard({ match }) {
   }, [hasWinner, match.winner, userVote, match.id]);
 
   useEffect(() => {
-    // Check if time is between 7:00 PM (19:00) and 8:15 PM (20:15)
     const checkTime = () => {
       const now = new Date();
       const hour = now.getHours();
@@ -46,10 +43,10 @@ export default function MatchCard({ match }) {
       
       if (match.status !== 'upcoming') {
         setCanVote(false);
-        setTimeMessage(match.status === 'completed' ? `Match Completed` : 'Match is live! Voting closed.');
+        setTimeMessage(match.status === 'completed' ? 'Match Completed' : 'Match is live! Voting closed.');
       } else if (isAfterStart && isBeforeEnd) {
         setCanVote(true);
-        setTimeMessage('Voting is Open! Closes at 8:15 PM');
+        setTimeMessage('🟢 Voting is Open! Closes at 8:15 PM');
       } else if (!isAfterStart) {
         setCanVote(false);
         setTimeMessage('Voting opens at 7:00 PM');
@@ -60,7 +57,7 @@ export default function MatchCard({ match }) {
     };
     
     checkTime();
-    const interval = setInterval(checkTime, 60000); // Check every minute
+    const interval = setInterval(checkTime, 60000);
     return () => clearInterval(interval);
   }, [match]);
 
@@ -70,7 +67,6 @@ export default function MatchCard({ match }) {
       'KKR': '#8B5CF6', 'SRH': '#F97316', 'RR': '#EC4899',
       'DC': '#4F7CFF', 'PBKS': '#DC2626', 'GT': '#1E40AF',
       'LSG': '#0EA5E9',
-      // International
       'IND': '#3B82F6', 'AUS': '#FBBF24', 'ENG': '#1D4ED8',
       'NZ': '#000000', 'SA': '#16A34A', 'PAK': '#22C55E',
       'SL': '#1E3A8A', 'WI': '#7C2D12', 'BAN': '#065F46',
@@ -85,13 +81,12 @@ export default function MatchCard({ match }) {
       'KKR': '💜', 'SRH': '🦅', 'RR': '🏰',
       'DC': '🐅', 'PBKS': '🛡️', 'GT': '⚡',
       'LSG': '🏹',
-      // International
       'IND': '🇮🇳', 'AUS': '🇦🇺', 'ENG': '🏴󠁧󠁢󠁥󠁮󠁧󠁿',
       'NZ': '🇳🇿', 'SA': '🇿🇦', 'PAK': '🇵🇰',
       'SL': '🇱🇰', 'WI': '🌴', 'BAN': '🇧🇩',
       'ZIM': '🇿🇼', 'AFG': '🇦🇫', 'IRE': '🇮🇪'
     };
-    return icons[team] || '';
+    return icons[team] || '🏏';
   };
 
   const handleVote = (team) => {
@@ -105,71 +100,105 @@ export default function MatchCard({ match }) {
   const isTeam1Winner = hasWinner && (match.winner.toLowerCase() === match.team1.toLowerCase() || match.winner.toLowerCase().includes(match.team1.toLowerCase()));
   const isTeam2Winner = hasWinner && (match.winner.toLowerCase() === match.team2.toLowerCase() || match.winner.toLowerCase().includes(match.team2.toLowerCase()));
 
+  // Get status badge
+  const getStatusBadge = () => {
+    if (isLive) {
+      return <span className="status-badge live"><span className="live-dot"></span>LIVE</span>;
+    }
+    if (isCompleted) {
+      return <span className="status-badge completed">✓ Completed</span>;
+    }
+    return <span className="status-badge upcoming">Upcoming</span>;
+  };
+
   return (
     <motion.div 
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      whileHover={{ scale: 1.02, y: -5 }}
-      transition={{ duration: 0.4 }}
-      className="glass-panel" 
+      whileHover={{ scale: 1.015, y: -3 }}
+      transition={{ duration: 0.35 }}
+      className={`glass-panel ${isLive ? 'live-pulse' : ''}`}
       style={{ 
         padding: '1.5rem', 
-        marginBottom: '1.5rem', 
+        marginBottom: '1rem', 
         position: 'relative', 
         overflow: 'hidden',
-        border: hasWinner ? '1px solid rgba(251, 191, 36, 0.3)' : '1px solid var(--surface-border)',
-        boxShadow: hasWinner ? '0 8px 32px rgba(251, 191, 36, 0.15)' : 'var(--shadow-card)'
+        borderLeft: isLive ? '3px solid #ef4444' : hasWinner ? '3px solid #fbbf24' : '3px solid transparent',
       }}
     >
-      {/* Tournament Badge */}
-      <div style={{
-        position: 'absolute', top: 0, left: 0, 
-        background: hasWinner ? 'linear-gradient(135deg, #FBBF24, #B45309)' : 'var(--gradient-primary)', 
-        padding: '0.25rem 1rem', 
-        fontSize: '0.75rem', 
-        fontWeight: 'bold',
-        borderBottomRightRadius: '12px',
-        color: hasWinner ? '#000' : '#fff'
+      {/* Top Row: Tournament + Status Badge */}
+      <div style={{ 
+        display: 'flex', 
+        justifyContent: 'space-between', 
+        alignItems: 'center', 
+        marginBottom: '1rem',
       }}>
-        {match.tournament} {hasWinner && '• FINISHED'}
+        <div style={{ 
+          fontSize: '0.7rem', 
+          fontWeight: 700, 
+          textTransform: 'uppercase', 
+          letterSpacing: '1px', 
+          color: 'var(--text-muted)',
+          background: 'rgba(255,255,255,0.04)',
+          padding: '4px 10px',
+          borderRadius: '6px'
+        }}>
+          {match.tournament}
+        </div>
+        {getStatusBadge()}
       </div>
 
-      <div style={{ textAlign: 'center', marginTop: '1rem', marginBottom: '1.5rem' }}>
-        <div style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '0.25rem' }}>
+      {/* Date & Venue Row */}
+      <div style={{ textAlign: 'center', marginBottom: '1.25rem' }}>
+        <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '0.25rem' }}>
           {new Date(match.date).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} • {match.startTime}
         </div>
         {match.venue && match.venue !== 'TBA' && (
-          <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginBottom: '0.5rem', opacity: 0.7 }}>
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.72rem', opacity: 0.7 }}>
             📍 {match.venue}
           </div>
         )}
-        <div style={{ 
-          color: canVote ? 'var(--accent-success)' : hasWinner ? '#FBBF24' : 'var(--accent-secondary)', 
-          fontWeight: 600, 
-          fontSize: '0.875rem' 
-        }}>
-          {hasWinner ? `Winner: ${match.winner}` : timeMessage}
-        </div>
       </div>
 
-      <div className="match-teams-layout" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
+      {/* Winner / Voting Status */}
+      {(hasWinner || timeMessage) && (
+        <div style={{ 
+          textAlign: 'center', 
+          marginBottom: '1rem',
+          padding: '0.4rem 0.75rem',
+          borderRadius: '8px',
+          background: hasWinner ? 'rgba(251, 191, 36, 0.08)' : canVote ? 'rgba(16, 185, 129, 0.08)' : 'transparent',
+        }}>
+          <div style={{ 
+            color: canVote ? 'var(--accent-success)' : hasWinner ? '#FBBF24' : 'var(--text-muted)', 
+            fontWeight: 600, 
+            fontSize: '0.8rem' 
+          }}>
+            {hasWinner ? `🏆 Winner: ${match.winner}` : timeMessage}
+          </div>
+        </div>
+      )}
+
+      {/* Teams Layout */}
+      <div className="match-teams-layout" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
         {/* Team 1 */}
         <div style={{ 
           flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center',
-          opacity: hasWinner && !isTeam1Winner ? 0.3 : 1,
+          opacity: hasWinner && !isTeam1Winner ? 0.25 : 1,
           filter: hasWinner && !isTeam1Winner ? 'grayscale(100%)' : 'none',
           transition: 'all 0.5s'
         }}>
           <motion.div 
-            whileHover={canVote ? { scale: 1.1 } : {}}
+            whileHover={canVote ? { scale: 1.12 } : {}}
+            whileTap={canVote ? { scale: 0.95 } : {}}
             className="team-circle"
             style={{
-              width: '70px', height: '70px', borderRadius: '50%',
-              background: `linear-gradient(135deg, ${getTeamColor(match.team1)} 0%, #000 150%)`,
+              width: '72px', height: '72px', borderRadius: '50%',
+              background: `linear-gradient(145deg, ${getTeamColor(match.team1)}cc 0%, ${getTeamColor(match.team1)}33 100%)`,
               display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
               fontSize: '1.1rem', fontWeight: 'bold', marginBottom: '0.5rem',
-              border: `3px solid ${userVote === match.team1 ? 'white' : 'transparent'}`,
-              boxShadow: userVote === match.team1 ? `0 0 20px ${getTeamColor(match.team1)}` : 'none',
+              border: `3px solid ${userVote === match.team1 ? 'white' : 'rgba(255,255,255,0.1)'}`,
+              boxShadow: userVote === match.team1 ? `0 0 25px ${getTeamColor(match.team1)}88` : `0 4px 12px rgba(0,0,0,0.3)`,
               cursor: canVote ? 'pointer' : 'default',
               position: 'relative',
               lineHeight: '1.2'
@@ -177,53 +206,73 @@ export default function MatchCard({ match }) {
             onClick={() => handleVote(match.team1)}
           >
             {isTeam1Winner && (
-              <div style={{ position: 'absolute', top: -15, fontSize: '1.5rem' }}>👑</div>
+              <motion.div 
+                initial={{ scale: 0, rotate: -20 }} 
+                animate={{ scale: 1, rotate: 0 }}
+                style={{ position: 'absolute', top: -14, fontSize: '1.4rem' }}
+              >👑</motion.div>
             )}
-            <span style={{ fontSize: '1.5rem', marginBottom: '-2px' }}>{getTeamIcon(match.team1)}</span>
-            <span>{match.team1}</span>
+            <span style={{ fontSize: '1.4rem', marginBottom: '-3px' }}>{getTeamIcon(match.team1)}</span>
+            <span style={{ fontSize: '0.75rem', fontWeight: 800 }}>{match.team1}</span>
           </motion.div>
-          <div style={{ fontSize: '0.875rem', color: isTeam1Winner ? '#FBBF24' : 'var(--text-secondary)', textAlign: 'center', fontWeight: isTeam1Winner ? 'bold' : 'normal' }}>
+          <div style={{ 
+            fontSize: '0.8rem', 
+            color: isTeam1Winner ? '#FBBF24' : 'var(--text-secondary)', 
+            textAlign: 'center', 
+            fontWeight: isTeam1Winner ? 'bold' : 'normal',
+            maxWidth: '100px',
+            lineHeight: '1.2'
+          }}>
             {match.team1Full}
           </div>
           
-          <button 
-            className={`btn ${userVote === match.team1 ? 'btn-primary' : 'btn-outline'}`}
-            style={{ 
-              marginTop: '1rem', width: '100%', padding: '0.5rem',
-              display: isCompleted ? 'none' : 'block' // Hide buttons if match completed
-            }}
-            onClick={() => handleVote(match.team1)}
-            disabled={!canVote && userVote !== match.team1}
-          >
-            {userVote === match.team1 ? 'Voted' : 'Vote'}
-          </button>
+          {!isCompleted && (
+            <motion.button 
+              whileHover={canVote ? { scale: 1.05 } : {}}
+              whileTap={canVote ? { scale: 0.95 } : {}}
+              className={`btn ${userVote === match.team1 ? 'btn-primary' : 'btn-outline'}`}
+              style={{ marginTop: '0.75rem', width: '100%', padding: '0.5rem', fontSize: '0.85rem' }}
+              onClick={() => handleVote(match.team1)}
+              disabled={!canVote && userVote !== match.team1}
+            >
+              {userVote === match.team1 ? '✓ Voted' : 'Vote'}
+            </motion.button>
+          )}
         </div>
 
-        {/* VS */}
-        <div className="vs-text" style={{ 
-          fontSize: '1.5rem', fontWeight: 800, color: 'var(--surface-border)', fontStyle: 'italic',
-          opacity: hasWinner ? 0 : 1
+        {/* VS Divider */}
+        <div style={{ 
+          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px',
+          opacity: hasWinner ? 0.2 : 0.6
         }}>
-          VS
+          <div style={{ width: '1px', height: '20px', background: 'var(--surface-border)' }}></div>
+          <div style={{ 
+            fontSize: '0.75rem', fontWeight: 800, color: 'var(--text-muted)', 
+            letterSpacing: '2px'
+          }}>
+            VS
+          </div>
+          <div style={{ width: '1px', height: '20px', background: 'var(--surface-border)' }}></div>
         </div>
 
         {/* Team 2 */}
         <div style={{ 
           flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center',
-          opacity: hasWinner && !isTeam2Winner ? 0.3 : 1,
+          opacity: hasWinner && !isTeam2Winner ? 0.25 : 1,
           filter: hasWinner && !isTeam2Winner ? 'grayscale(100%)' : 'none',
           transition: 'all 0.5s'
         }}>
           <motion.div 
-            whileHover={canVote ? { scale: 1.1 } : {}}
+            whileHover={canVote ? { scale: 1.12 } : {}}
+            whileTap={canVote ? { scale: 0.95 } : {}}
             className="team-circle"
             style={{
-              width: '70px', height: '70px', borderRadius: '50%',
-              background: `linear-gradient(135deg, ${getTeamColor(match.team2)} 0%, #000 150%)`,
+              width: '72px', height: '72px', borderRadius: '50%',
+              background: `linear-gradient(145deg, ${getTeamColor(match.team2)}cc 0%, ${getTeamColor(match.team2)}33 100%)`,
               display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
               fontSize: '1.1rem', fontWeight: 'bold', marginBottom: '0.5rem',
-              border: `3px solid ${userVote === match.team2 ? 'white' : 'transparent'}`,
-              boxShadow: userVote === match.team2 ? `0 0 20px ${getTeamColor(match.team2)}` : 'none',
+              border: `3px solid ${userVote === match.team2 ? 'white' : 'rgba(255,255,255,0.1)'}`,
+              boxShadow: userVote === match.team2 ? `0 0 25px ${getTeamColor(match.team2)}88` : `0 4px 12px rgba(0,0,0,0.3)`,
               cursor: canVote ? 'pointer' : 'default',
               position: 'relative',
               lineHeight: '1.2'
@@ -231,26 +280,38 @@ export default function MatchCard({ match }) {
             onClick={() => handleVote(match.team2)}
           >
             {isTeam2Winner && (
-              <div style={{ position: 'absolute', top: -15, fontSize: '1.5rem' }}>👑</div>
+              <motion.div 
+                initial={{ scale: 0, rotate: 20 }} 
+                animate={{ scale: 1, rotate: 0 }}
+                style={{ position: 'absolute', top: -14, fontSize: '1.4rem' }}
+              >👑</motion.div>
             )}
-            <span style={{ fontSize: '1.5rem', marginBottom: '-2px' }}>{getTeamIcon(match.team2)}</span>
-            <span>{match.team2}</span>
+            <span style={{ fontSize: '1.4rem', marginBottom: '-3px' }}>{getTeamIcon(match.team2)}</span>
+            <span style={{ fontSize: '0.75rem', fontWeight: 800 }}>{match.team2}</span>
           </motion.div>
-          <div style={{ fontSize: '0.875rem', color: isTeam2Winner ? '#FBBF24' : 'var(--text-secondary)', textAlign: 'center', fontWeight: isTeam2Winner ? 'bold' : 'normal' }}>
+          <div style={{ 
+            fontSize: '0.8rem', 
+            color: isTeam2Winner ? '#FBBF24' : 'var(--text-secondary)', 
+            textAlign: 'center', 
+            fontWeight: isTeam2Winner ? 'bold' : 'normal',
+            maxWidth: '100px',
+            lineHeight: '1.2'
+          }}>
             {match.team2Full}
           </div>
           
-          <button 
-            className={`btn ${userVote === match.team2 ? 'btn-primary' : 'btn-outline'}`}
-            style={{ 
-              marginTop: '1rem', width: '100%', padding: '0.5rem',
-              display: isCompleted ? 'none' : 'block' // Hide buttons if match completed
-            }}
-            onClick={() => handleVote(match.team2)}
-            disabled={!canVote && userVote !== match.team2}
-          >
-            {userVote === match.team2 ? 'Voted' : 'Vote'}
-          </button>
+          {!isCompleted && (
+            <motion.button 
+              whileHover={canVote ? { scale: 1.05 } : {}}
+              whileTap={canVote ? { scale: 0.95 } : {}}
+              className={`btn ${userVote === match.team2 ? 'btn-primary' : 'btn-outline'}`}
+              style={{ marginTop: '0.75rem', width: '100%', padding: '0.5rem', fontSize: '0.85rem' }}
+              onClick={() => handleVote(match.team2)}
+              disabled={!canVote && userVote !== match.team2}
+            >
+              {userVote === match.team2 ? '✓ Voted' : 'Vote'}
+            </motion.button>
+          )}
         </div>
       </div>
     </motion.div>

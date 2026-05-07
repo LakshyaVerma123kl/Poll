@@ -5,7 +5,8 @@ const AppContext = createContext();
 
 export const useApp = () => useContext(AppContext);
 
-const API_BASE = 'http://localhost:3001/api';
+// Automatically adapts to Split Deployment (Vercel + Render), Single Service (Render), or Local Dev
+const API_BASE = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '/api' : 'http://localhost:3001/api');
 
 export const AppProvider = ({ children }) => {
   const [currentUser, setCurrentUser] = useState(() => {

@@ -61,7 +61,15 @@ export const AppProvider = ({ children }) => {
       setCurrentUser(res.data);
       localStorage.setItem('currentUser', JSON.stringify(res.data));
     } catch (err) {
-      alert("Login failed");
+      if (err.response?.status === 403 && err.response?.data?.existingUser) {
+        // IP already has an account — auto-login as that user
+        const existing = err.response.data.existingUser;
+        setCurrentUser(existing);
+        localStorage.setItem('currentUser', JSON.stringify(existing));
+        alert(`This device is already registered as "${existing.name}". Logging you in.`);
+      } else {
+        alert(err.response?.data?.error || "Login failed");
+      }
     }
   };
 

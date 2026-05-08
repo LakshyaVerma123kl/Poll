@@ -15,7 +15,22 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Trust proxy so req.ip works behind Render's reverse proxy
+app.set('trust proxy', true);
+
 const PORT = process.env.PORT || 3001;
+
+/**
+ * Helper: Get a normalized client IP from the request.
+ * Handles X-Forwarded-For, req.ip, and local dev fallbacks.
+ */
+function getClientIp(req) {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (forwarded) {
+    return forwarded.split(',')[0].trim();
+  }
+  return req.ip || req.socket?.remoteAddress || 'unknown';
+}
 
 // Serve static files in production
 if (process.env.NODE_ENV === 'production') {
@@ -30,15 +45,35 @@ app.post('/api/login', async (req, res) => {
     if (!name) return res.status(400).json({ error: "Name is required" });
     
     const db = getDb();
+    const clientIp = getClientIp(req);
     
+    // Check if this IP already has a registered user
+    const existingByIp = db.prepare('SELECT * FROM users WHERE ip = ?').get(clientIp);
+    
+    // If user exists by name, allow re-login from any IP but update their IP
     let user = db.prepare('SELECT * FROM users WHERE name COLLATE NOCASE = ?').get(name);
     
-    if (!user) {
-      const id = 'u' + Date.now();
-      const avatar = name.charAt(0).toUpperCase();
-      db.prepare('INSERT INTO users (id, name, points, avatar) VALUES (?, ?, 0, ?)').run(id, name, avatar);
-      user = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+    if (user) {
+      // User exists — allow re-login, update IP
+      db.prepare('UPDATE users SET ip = ? WHERE id = ?').run(clientIp, user.id);
+      user = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+      res.json(user);
+      return;
     }
+    
+    // New user — check if this IP already has an account
+    if (existingByIp) {
+      return res.status(403).json({ 
+        error: `This device is already registered as "${existingByIp.name}". Only one account per device is allowed.`,
+        existingUser: existingByIp
+      });
+    }
+    
+    // Create new user
+    const id = 'u' + Date.now();
+    const avatar = name.charAt(0).toUpperCase();
+    db.prepare('INSERT INTO users (id, name, points, avatar, ip) VALUES (?, ?, 0, ?, ?)').run(id, name, avatar, clientIp);
+    user = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
     
     res.json(user);
   } catch (err) {
@@ -50,7 +85,8 @@ app.post('/api/login', async (req, res) => {
 app.get('/api/users', async (req, res) => {
   try {
     const db = getDb();
-    const users = db.prepare('SELECT * FROM users ORDER BY points DESC').all();
+    // Don't expose IP addresses to clients
+    const users = db.prepare('SELECT id, name, points, avatar FROM users ORDER BY points DESC').all();
     res.json(users);
   } catch (err) {
     res.status(500).json({ error: "Server Error" });
@@ -129,8 +165,9 @@ app.post('/api/admin/simulate', async (req, res) => {
 });
 
 // Catch-all route to serve React app for non-API requests in production
+// Express 5 requires named splat params instead of bare '*'
 if (process.env.NODE_ENV === 'production') {
-  app.get('*', (req, res) => {
+  app.get('/{*splat}', (req, res) => {
     res.sendFile(path.join(__dirname, '../dist/index.html'));
   });
 }

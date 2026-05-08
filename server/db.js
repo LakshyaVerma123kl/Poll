@@ -103,9 +103,18 @@ export const initDb = async () => {
       id TEXT PRIMARY KEY,
       name TEXT UNIQUE,
       points INTEGER DEFAULT 0,
-      avatar TEXT
+      avatar TEXT,
+      ip TEXT
     );
   `);
+
+  // Migration: add ip column if missing (for existing databases)
+  try {
+    wrapper.prepare("SELECT ip FROM users LIMIT 1").get();
+  } catch (e) {
+    wrapper.exec("ALTER TABLE users ADD COLUMN ip TEXT;");
+    console.log("Migrated: added 'ip' column to users table.");
+  }
   wrapper.exec(`
     CREATE TABLE IF NOT EXISTS matches (
       id TEXT PRIMARY KEY,

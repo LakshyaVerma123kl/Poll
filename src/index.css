@@ -366,6 +366,7 @@ header {
   background: linear-gradient(90deg, var(--text-primary) 0%, var(--accent-secondary) 50%, var(--text-primary) 100%);
   background-size: 200% auto;
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
   animation: shimmer 3s linear infinite;
 }

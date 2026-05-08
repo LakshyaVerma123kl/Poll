@@ -128,9 +128,26 @@ export const initDb = async () => {
       winner TEXT,
       tournament TEXT,
       venue TEXT DEFAULT 'TBA',
-      category TEXT DEFAULT 'ipl'
+      category TEXT DEFAULT 'ipl',
+      matchType TEXT DEFAULT 't20',
+      isAbroad INTEGER DEFAULT 0
     );
   `);
+
+  // Migration: add matchType column if missing (for existing databases)
+  try {
+    wrapper.prepare("SELECT matchType FROM matches LIMIT 1").get();
+  } catch (e) {
+    wrapper.exec("ALTER TABLE matches ADD COLUMN matchType TEXT DEFAULT 't20';");
+    console.log("Migrated: added 'matchType' column to matches table.");
+  }
+  // Migration: add isAbroad column if missing
+  try {
+    wrapper.prepare("SELECT isAbroad FROM matches LIMIT 1").get();
+  } catch (e) {
+    wrapper.exec("ALTER TABLE matches ADD COLUMN isAbroad INTEGER DEFAULT 0;");
+    console.log("Migrated: added 'isAbroad' column to matches table.");
+  }
   wrapper.exec(`
     CREATE TABLE IF NOT EXISTS votes (
       matchId TEXT,

@@ -119,19 +119,72 @@ app.post('/api/vote', async (req, res) => {
   try {
     const { userId, matchId, team } = req.body;
     
-    // Check time restriction
-    const now = new Date();
-    const hour = now.getHours();
-    const minute = now.getMinutes();
-    
-    // We allow voting for demo purposes, but log the true logic:
-    // const isTimeValid = (hour === 19) || (hour === 20 && minute <= 15);
-    // if (!isTimeValid) return res.status(403).json({ error: "Voting is only allowed between 7 PM and 8:15 PM" });
-    
     const db = getDb();
     const match = db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId);
-    if (match && match.status !== 'upcoming') {
-      return res.status(400).json({ error: "Cannot vote on this match anymore" });
+    if (!match) return res.status(404).json({ error: "Match not found" });
+    if (match.status === 'completed') {
+      return res.status(400).json({ error: "Cannot vote on a completed match" });
+    }
+    if (match.status === 'live') {
+      // For live matches, check if we're still within the over cutoff window
+      // We'll allow voting during live if still within the over-based window
+    }
+
+    // ── Voting Window Calculation (all times in IST = UTC+5:30) ──
+    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+    const nowUTC = Date.now();
+    const nowIST = new Date(nowUTC + IST_OFFSET_MS);
+
+    // Parse match start time in IST
+    const [startH, startM] = (match.startTime || '19:30').split(':').map(Number);
+    const matchDateIST = new Date(match.date + 'T00:00:00+05:30');
+    matchDateIST.setHours(startH, startM, 0, 0);
+    const matchStartMs = matchDateIST.getTime();
+
+    const matchType = match.matchType || 't20';
+    const isAbroad = Number(match.isAbroad) === 1;
+
+    // Over duration estimates (~4 min/over)
+    const OVER_DURATION_MS = 4 * 60 * 1000;
+    // Toss is ~30 min before match start
+    const TOSS_OFFSET_MS = 30 * 60 * 1000;
+
+    let voteOpenMs, voteCloseMs, windowDesc;
+
+    if (isAbroad) {
+      // ABROAD: Opens at 7:00 AM IST on match day, closes after ~6 overs from match start
+      const abroadOpenIST = new Date(match.date + 'T00:00:00+05:30');
+      abroadOpenIST.setHours(7, 0, 0, 0);
+      voteOpenMs = abroadOpenIST.getTime();
+      voteCloseMs = matchStartMs + (6 * OVER_DURATION_MS);
+      windowDesc = `7:00 AM IST to ~6 overs after start`;
+    } else {
+      // INDIA: Opens at toss time (30 min before start)
+      voteOpenMs = matchStartMs - TOSS_OFFSET_MS;
+
+      if (matchType === 't20') {
+        // Close after ~4 overs from match start
+        voteCloseMs = matchStartMs + (4 * OVER_DURATION_MS);
+        windowDesc = `Toss to ~4 overs`;
+      } else if (matchType === 'odi') {
+        // Close after ~8 overs from match start
+        voteCloseMs = matchStartMs + (8 * OVER_DURATION_MS);
+        windowDesc = `Toss to ~8 overs`;
+      } else {
+        // Test: close after ~18 overs from match start
+        voteCloseMs = matchStartMs + (18 * OVER_DURATION_MS);
+        windowDesc = `Toss to ~18 overs`;
+      }
+    }
+
+    const nowMs = nowIST.getTime();
+    if (nowMs < voteOpenMs) {
+      const opensAt = new Date(voteOpenMs);
+      const timeStr = `${String(opensAt.getHours()).padStart(2,'0')}:${String(opensAt.getMinutes()).padStart(2,'0')}`;
+      return res.status(403).json({ error: `Voting opens at ${timeStr} IST (${windowDesc})` });
+    }
+    if (nowMs > voteCloseMs) {
+      return res.status(403).json({ error: `Voting window closed (${windowDesc})` });
     }
 
     db.prepare('INSERT INTO votes (matchId, userId, team) VALUES (?, ?, ?) ON CONFLICT(matchId, userId) DO UPDATE SET team=excluded.team').run(matchId, userId, team);

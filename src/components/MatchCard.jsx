@@ -36,30 +36,92 @@ export default function MatchCard({ match }) {
 
   useEffect(() => {
     const checkTime = () => {
-      const now = new Date();
-      const hour = now.getHours();
-      const minute = now.getMinutes();
-      
-      const isAfterStart = hour > 19 || (hour === 19 && minute >= 0);
-      const isBeforeEnd = hour < 20 || (hour === 20 && minute <= 15);
-      
-      if (match.status !== 'upcoming') {
+      if (match.status === 'completed') {
         setCanVote(false);
-        setTimeMessage(match.status === 'completed' ? 'Match Completed' : 'Match is live! Voting closed.');
-      } else if (isAfterStart && isBeforeEnd) {
+        setTimeMessage('Match Completed');
+        return;
+      }
+
+      // ── Voting Window (IST-aware, format-specific) ──
+      const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+      const nowUTC = Date.now();
+      const nowIST = new Date(nowUTC + IST_OFFSET_MS);
+
+      // Parse match start time as IST
+      const [startH, startM] = (match.startTime || '19:30').split(':').map(Number);
+      const matchDateIST = new Date(match.date + 'T00:00:00+05:30');
+      matchDateIST.setHours(startH, startM, 0, 0);
+      const matchStartMs = matchDateIST.getTime();
+
+      const matchType = match.matchType || 't20';
+      const isAbroad = match.isAbroad === true || match.isAbroad === 1 || match.isAbroad === '1';
+
+      // ~4 min per over
+      const OVER_MS = 4 * 60 * 1000;
+      const TOSS_OFFSET_MS = 30 * 60 * 1000;
+
+      let voteOpenMs, voteCloseMs, openLabel, closeLabel;
+
+      if (isAbroad) {
+        const openIST = new Date(match.date + 'T00:00:00+05:30');
+        openIST.setHours(7, 0, 0, 0);
+        voteOpenMs = openIST.getTime();
+        voteCloseMs = matchStartMs + (6 * OVER_MS);
+        openLabel = '7:00 AM IST';
+        closeLabel = '~6 overs after start';
+      } else {
+        voteOpenMs = matchStartMs - TOSS_OFFSET_MS;
+        const tossDate = new Date(voteOpenMs);
+        const tossH = String(tossDate.getHours()).padStart(2, '0');
+        const tossMin = String(tossDate.getMinutes()).padStart(2, '0');
+        openLabel = `${tossH}:${tossMin} IST (Toss)`;
+
+        if (matchType === 't20') {
+          voteCloseMs = matchStartMs + (4 * OVER_MS);
+          closeLabel = '~4 overs';
+        } else if (matchType === 'odi') {
+          voteCloseMs = matchStartMs + (8 * OVER_MS);
+          closeLabel = '~8 overs';
+        } else {
+          voteCloseMs = matchStartMs + (18 * OVER_MS);
+          closeLabel = '~18 overs';
+        }
+      }
+
+      const nowMs = nowIST.getTime();
+
+      if (nowMs < voteOpenMs) {
+        setCanVote(false);
+        const diff = voteOpenMs - nowMs;
+        const hrs = Math.floor(diff / 3600000);
+        const mins = Math.floor((diff % 3600000) / 60000);
+        if (hrs > 24) {
+          setTimeMessage(`Voting opens at ${openLabel}`);
+        } else if (hrs > 0) {
+          setTimeMessage(`⏳ Opens in ${hrs}h ${mins}m (${openLabel})`);
+        } else {
+          setTimeMessage(`⏳ Opens in ${mins}m (${openLabel})`);
+        }
+      } else if (nowMs <= voteCloseMs) {
+        setCanVote(match.status !== 'live' || nowMs <= voteCloseMs);
+        const remaining = voteCloseMs - nowMs;
+        const mins = Math.floor(remaining / 60000);
+        if (mins > 60) {
+          const h = Math.floor(mins / 60);
+          const m = mins % 60;
+          setTimeMessage(`🟢 Voting Open! Closes after ${closeLabel} (~${h}h ${m}m left)`);
+        } else {
+          setTimeMessage(`🟢 Voting Open! Closes after ${closeLabel} (~${mins}m left)`);
+        }
         setCanVote(true);
-        setTimeMessage('🟢 Voting is Open! Closes at 8:15 PM');
-      } else if (!isAfterStart) {
-        setCanVote(false);
-        setTimeMessage('Voting opens at 7:00 PM');
       } else {
         setCanVote(false);
-        setTimeMessage('Voting closed at 8:15 PM');
+        setTimeMessage(`Voting closed (after ${closeLabel})`);
       }
     };
     
     checkTime();
-    const interval = setInterval(checkTime, 60000);
+    const interval = setInterval(checkTime, 30000); // Check every 30s for accuracy
     return () => clearInterval(interval);
   }, [match]);
 
@@ -95,7 +157,7 @@ export default function MatchCard({ match }) {
     if (canVote) {
       castVote(match.id, team);
     } else {
-      alert("Voting is only allowed between 7:00 PM and 8:15 PM!");
+      alert(timeMessage || "Voting is not available for this match right now.");
     }
   };
 

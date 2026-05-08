@@ -56,12 +56,59 @@ function categorizeMatch(name, matchType) {
   return 'domestic';
 }
 
+/**
+ * Determine the match format type: 't20', 'odi', or 'test'
+ * Used for voting window calculations.
+ */
+function getMatchFormat(name, matchType, category) {
+  const mt = (matchType || '').toLowerCase();
+  if (mt === 'test') return 'test';
+  if (mt === 'odi') return 'odi';
+  if (mt === 't20' || mt === 't20i') return 't20';
+
+  // Infer from category
+  if (category === 'ipl') return 't20';
+  if (category === 'icc-t20') return 't20';
+  if (category === 'icc-odi') return 'odi';
+  if (category === 'icc-test') return 'test';
+
+  // Infer from name
+  const n = (name || '').toLowerCase();
+  if (n.includes('t20') || n.includes('ipl')) return 't20';
+  if (n.includes('odi')) return 'odi';
+  if (n.includes('test')) return 'test';
+  return 't20'; // default
+}
+
+/**
+ * Determine if a venue is in India.
+ * Used to decide between India voting window vs abroad voting window.
+ */
+const INDIA_CITIES = [
+  'mumbai', 'delhi', 'kolkata', 'chennai', 'bengaluru', 'bangalore',
+  'hyderabad', 'ahmedabad', 'jaipur', 'lucknow', 'mohali', 'chandigarh',
+  'pune', 'indore', 'dharamshala', 'thiruvananthapuram', 'trivandrum',
+  'nagpur', 'rajkot', 'cuttack', 'guwahati', 'visakhapatnam', 'vizag',
+  'ranchi', 'raipur', 'kanpur', 'wankhede', 'eden gardens', 'chinnaswamy',
+  'chidambaram', 'feroz shah', 'arun jaitley', 'narendra modi', 'ekana',
+  'hpca', 'sawai mansingh', 'brabourne', 'svns', 'new chandigarh',
+  'india', 'uppal',
+];
+
+function isIndianVenue(venue) {
+  if (!venue || venue === 'TBA') return true; // Default to India if unknown
+  const v = venue.toLowerCase();
+  return INDIA_CITIES.some(city => v.includes(city));
+}
+
 function mapApiMatch(m) {
   const name = m.name || '';
   if (isWomensMatch(name)) return null;
 
   const team1Full = m.teams?.[0] || 'TBD';
   const team2Full = m.teams?.[1] || 'TBD';
+  const category = categorizeMatch(name, m.matchType);
+  const venue = m.venue || 'TBA';
 
   return {
     id: m.id,
@@ -71,11 +118,13 @@ function mapApiMatch(m) {
     team2Full,
     date: m.date,
     startTime: m.dateTimeGMT ? new Date(m.dateTimeGMT).toISOString().substring(11, 16) : '19:30',
-    venue: m.venue || 'TBA',
+    venue,
     status: m.matchStarted ? (m.matchEnded ? 'completed' : 'live') : 'upcoming',
     winner: m.matchEnded ? (m.status || null) : null,
     tournament: name,
-    category: categorizeMatch(name, m.matchType)
+    category,
+    matchType: getMatchFormat(name, m.matchType, category),
+    isAbroad: !isIndianVenue(venue)
   };
 }
 
@@ -135,18 +184,23 @@ async function scrapeCricbuzz() {
     const id = 'scrape_' + Buffer.from(matchName).toString('base64').substring(0, 12);
     const statusLower = statusText.toLowerCase();
 
+    const category = categorizeMatch(matchName, 't20');
+    const venue = 'TBA';
+
     matches.push({
       id,
       team1: getShortName(t1), team1Full: t1,
       team2: getShortName(t2), team2Full: t2,
       date: new Date().toISOString().split('T')[0],
       startTime: '19:30',
-      venue: 'TBA',
+      venue,
       status: statusLower.includes('live') ? 'live' :
               statusLower.includes('won') ? 'completed' : 'upcoming',
       winner: statusLower.includes('won') ? statusText.split(' won ')[0].trim() : null,
       tournament: 'Live Matches',
-      category: categorizeMatch(matchName, 't20')
+      category,
+      matchType: getMatchFormat(matchName, 't20', category),
+      isAbroad: !isIndianVenue(venue)
     });
   });
 
@@ -159,42 +213,42 @@ async function scrapeCricbuzz() {
 // Hardcoded verified fallback
 const fallbackMatches = [
   // IPL 2026 remaining league matches
-  { id: 'ipl-2026-m68', team1: 'DC', team1Full: 'Delhi Capitals', team2: 'KKR', team2Full: 'Kolkata Knight Riders', date: '2026-05-08', startTime: '19:30', venue: 'Arun Jaitley Stadium, Delhi', status: 'upcoming', winner: null, tournament: 'IPL 2026', category: 'ipl' },
-  { id: 'ipl-2026-m69', team1: 'RR', team1Full: 'Rajasthan Royals', team2: 'GT', team2Full: 'Gujarat Titans', date: '2026-05-09', startTime: '19:30', venue: 'Sawai Mansingh Stadium, Jaipur', status: 'upcoming', winner: null, tournament: 'IPL 2026', category: 'ipl' },
-  { id: 'ipl-2026-m70a', team1: 'CSK', team1Full: 'Chennai Super Kings', team2: 'LSG', team2Full: 'Lucknow Super Giants', date: '2026-05-10', startTime: '15:30', venue: 'MA Chidambaram Stadium, Chennai', status: 'upcoming', winner: null, tournament: 'IPL 2026', category: 'ipl' },
-  { id: 'ipl-2026-m70b', team1: 'RCB', team1Full: 'Royal Challengers Bengaluru', team2: 'MI', team2Full: 'Mumbai Indians', date: '2026-05-10', startTime: '19:30', venue: 'SVNS International Cricket Stadium, Raipur', status: 'upcoming', winner: null, tournament: 'IPL 2026', category: 'ipl' },
-  { id: 'ipl-2026-m71', team1: 'PBKS', team1Full: 'Punjab Kings', team2: 'DC', team2Full: 'Delhi Capitals', date: '2026-05-11', startTime: '19:30', venue: 'HPCA Stadium, Dharamshala', status: 'upcoming', winner: null, tournament: 'IPL 2026', category: 'ipl' },
-  { id: 'ipl-2026-m72', team1: 'GT', team1Full: 'Gujarat Titans', team2: 'SRH', team2Full: 'Sunrisers Hyderabad', date: '2026-05-12', startTime: '19:30', venue: 'Narendra Modi Stadium, Ahmedabad', status: 'upcoming', winner: null, tournament: 'IPL 2026', category: 'ipl' },
-  { id: 'ipl-2026-m73', team1: 'RCB', team1Full: 'Royal Challengers Bengaluru', team2: 'KKR', team2Full: 'Kolkata Knight Riders', date: '2026-05-13', startTime: '19:30', venue: 'SVNS International Cricket Stadium, Raipur', status: 'upcoming', winner: null, tournament: 'IPL 2026', category: 'ipl' },
-  { id: 'ipl-2026-m74', team1: 'PBKS', team1Full: 'Punjab Kings', team2: 'MI', team2Full: 'Mumbai Indians', date: '2026-05-14', startTime: '19:30', venue: 'HPCA Stadium, Dharamshala', status: 'upcoming', winner: null, tournament: 'IPL 2026', category: 'ipl' },
-  { id: 'ipl-2026-m75', team1: 'LSG', team1Full: 'Lucknow Super Giants', team2: 'CSK', team2Full: 'Chennai Super Kings', date: '2026-05-15', startTime: '19:30', venue: 'Ekana Cricket Stadium, Lucknow', status: 'upcoming', winner: null, tournament: 'IPL 2026', category: 'ipl' },
-  { id: 'ipl-2026-m76', team1: 'KKR', team1Full: 'Kolkata Knight Riders', team2: 'MI', team2Full: 'Mumbai Indians', date: '2026-05-20', startTime: '19:30', venue: 'Eden Gardens, Kolkata', status: 'upcoming', winner: null, tournament: 'IPL 2026', category: 'ipl' },
-  { id: 'ipl-2026-m77', team1: 'MI', team1Full: 'Mumbai Indians', team2: 'RR', team2Full: 'Rajasthan Royals', date: '2026-05-24', startTime: '19:30', venue: 'Wankhede Stadium, Mumbai', status: 'upcoming', winner: null, tournament: 'IPL 2026', category: 'ipl' },
+  { id: 'ipl-2026-m68', team1: 'DC', team1Full: 'Delhi Capitals', team2: 'KKR', team2Full: 'Kolkata Knight Riders', date: '2026-05-08', startTime: '19:30', venue: 'Arun Jaitley Stadium, Delhi', status: 'upcoming', winner: null, tournament: 'IPL 2026', category: 'ipl', matchType: 't20', isAbroad: false },
+  { id: 'ipl-2026-m69', team1: 'RR', team1Full: 'Rajasthan Royals', team2: 'GT', team2Full: 'Gujarat Titans', date: '2026-05-09', startTime: '19:30', venue: 'Sawai Mansingh Stadium, Jaipur', status: 'upcoming', winner: null, tournament: 'IPL 2026', category: 'ipl', matchType: 't20', isAbroad: false },
+  { id: 'ipl-2026-m70a', team1: 'CSK', team1Full: 'Chennai Super Kings', team2: 'LSG', team2Full: 'Lucknow Super Giants', date: '2026-05-10', startTime: '15:30', venue: 'MA Chidambaram Stadium, Chennai', status: 'upcoming', winner: null, tournament: 'IPL 2026', category: 'ipl', matchType: 't20', isAbroad: false },
+  { id: 'ipl-2026-m70b', team1: 'RCB', team1Full: 'Royal Challengers Bengaluru', team2: 'MI', team2Full: 'Mumbai Indians', date: '2026-05-10', startTime: '19:30', venue: 'SVNS International Cricket Stadium, Raipur', status: 'upcoming', winner: null, tournament: 'IPL 2026', category: 'ipl', matchType: 't20', isAbroad: false },
+  { id: 'ipl-2026-m71', team1: 'PBKS', team1Full: 'Punjab Kings', team2: 'DC', team2Full: 'Delhi Capitals', date: '2026-05-11', startTime: '19:30', venue: 'HPCA Stadium, Dharamshala', status: 'upcoming', winner: null, tournament: 'IPL 2026', category: 'ipl', matchType: 't20', isAbroad: false },
+  { id: 'ipl-2026-m72', team1: 'GT', team1Full: 'Gujarat Titans', team2: 'SRH', team2Full: 'Sunrisers Hyderabad', date: '2026-05-12', startTime: '19:30', venue: 'Narendra Modi Stadium, Ahmedabad', status: 'upcoming', winner: null, tournament: 'IPL 2026', category: 'ipl', matchType: 't20', isAbroad: false },
+  { id: 'ipl-2026-m73', team1: 'RCB', team1Full: 'Royal Challengers Bengaluru', team2: 'KKR', team2Full: 'Kolkata Knight Riders', date: '2026-05-13', startTime: '19:30', venue: 'SVNS International Cricket Stadium, Raipur', status: 'upcoming', winner: null, tournament: 'IPL 2026', category: 'ipl', matchType: 't20', isAbroad: false },
+  { id: 'ipl-2026-m74', team1: 'PBKS', team1Full: 'Punjab Kings', team2: 'MI', team2Full: 'Mumbai Indians', date: '2026-05-14', startTime: '19:30', venue: 'HPCA Stadium, Dharamshala', status: 'upcoming', winner: null, tournament: 'IPL 2026', category: 'ipl', matchType: 't20', isAbroad: false },
+  { id: 'ipl-2026-m75', team1: 'LSG', team1Full: 'Lucknow Super Giants', team2: 'CSK', team2Full: 'Chennai Super Kings', date: '2026-05-15', startTime: '19:30', venue: 'Ekana Cricket Stadium, Lucknow', status: 'upcoming', winner: null, tournament: 'IPL 2026', category: 'ipl', matchType: 't20', isAbroad: false },
+  { id: 'ipl-2026-m76', team1: 'KKR', team1Full: 'Kolkata Knight Riders', team2: 'MI', team2Full: 'Mumbai Indians', date: '2026-05-20', startTime: '19:30', venue: 'Eden Gardens, Kolkata', status: 'upcoming', winner: null, tournament: 'IPL 2026', category: 'ipl', matchType: 't20', isAbroad: false },
+  { id: 'ipl-2026-m77', team1: 'MI', team1Full: 'Mumbai Indians', team2: 'RR', team2Full: 'Rajasthan Royals', date: '2026-05-24', startTime: '19:30', venue: 'Wankhede Stadium, Mumbai', status: 'upcoming', winner: null, tournament: 'IPL 2026', category: 'ipl', matchType: 't20', isAbroad: false },
   // IPL Playoffs
-  { id: 'ipl-2026-q1', team1: 'TBD', team1Full: 'Qualifier 1 - Team 1', team2: 'TBD', team2Full: 'Qualifier 1 - Team 2', date: '2026-05-26', startTime: '19:30', venue: 'HPCA Stadium, Dharamshala', status: 'upcoming', winner: null, tournament: 'IPL 2026 - Qualifier 1', category: 'ipl' },
-  { id: 'ipl-2026-elim', team1: 'TBD', team1Full: 'Eliminator - Team 1', team2: 'TBD', team2Full: 'Eliminator - Team 2', date: '2026-05-27', startTime: '19:30', venue: 'New International Cricket Stadium, New Chandigarh', status: 'upcoming', winner: null, tournament: 'IPL 2026 - Eliminator', category: 'ipl' },
-  { id: 'ipl-2026-q2', team1: 'TBD', team1Full: 'Qualifier 2 - Team 1', team2: 'TBD', team2Full: 'Qualifier 2 - Team 2', date: '2026-05-29', startTime: '19:30', venue: 'New International Cricket Stadium, New Chandigarh', status: 'upcoming', winner: null, tournament: 'IPL 2026 - Qualifier 2', category: 'ipl' },
-  { id: 'ipl-2026-final', team1: 'TBD', team1Full: 'IPL Final - Team 1', team2: 'TBD', team2Full: 'IPL Final - Team 2', date: '2026-05-31', startTime: '19:30', venue: 'Narendra Modi Stadium, Ahmedabad', status: 'upcoming', winner: null, tournament: 'IPL 2026 - FINAL', category: 'ipl' },
+  { id: 'ipl-2026-q1', team1: 'TBD', team1Full: 'Qualifier 1 - Team 1', team2: 'TBD', team2Full: 'Qualifier 1 - Team 2', date: '2026-05-26', startTime: '19:30', venue: 'HPCA Stadium, Dharamshala', status: 'upcoming', winner: null, tournament: 'IPL 2026 - Qualifier 1', category: 'ipl', matchType: 't20', isAbroad: false },
+  { id: 'ipl-2026-elim', team1: 'TBD', team1Full: 'Eliminator - Team 1', team2: 'TBD', team2Full: 'Eliminator - Team 2', date: '2026-05-27', startTime: '19:30', venue: 'New International Cricket Stadium, New Chandigarh', status: 'upcoming', winner: null, tournament: 'IPL 2026 - Eliminator', category: 'ipl', matchType: 't20', isAbroad: false },
+  { id: 'ipl-2026-q2', team1: 'TBD', team1Full: 'Qualifier 2 - Team 1', team2: 'TBD', team2Full: 'Qualifier 2 - Team 2', date: '2026-05-29', startTime: '19:30', venue: 'New International Cricket Stadium, New Chandigarh', status: 'upcoming', winner: null, tournament: 'IPL 2026 - Qualifier 2', category: 'ipl', matchType: 't20', isAbroad: false },
+  { id: 'ipl-2026-final', team1: 'TBD', team1Full: 'IPL Final - Team 1', team2: 'TBD', team2Full: 'IPL Final - Team 2', date: '2026-05-31', startTime: '19:30', venue: 'Narendra Modi Stadium, Ahmedabad', status: 'upcoming', winner: null, tournament: 'IPL 2026 - FINAL', category: 'ipl', matchType: 't20', isAbroad: false },
   // ICC T20 World Cup 2026 (Completed)
-  { id: 'icc-t20wc-sf1', team1: 'NZ', team1Full: 'New Zealand', team2: 'SA', team2Full: 'South Africa', date: '2026-03-04', startTime: '19:30', venue: 'Eden Gardens, Kolkata', status: 'completed', winner: 'New Zealand', tournament: 'T20 World Cup 2026 - Semi Final 1', category: 'icc-t20' },
-  { id: 'icc-t20wc-sf2', team1: 'IND', team1Full: 'India', team2: 'ENG', team2Full: 'England', date: '2026-03-05', startTime: '19:30', venue: 'Wankhede Stadium, Mumbai', status: 'completed', winner: 'India', tournament: 'T20 World Cup 2026 - Semi Final 2', category: 'icc-t20' },
-  { id: 'icc-t20wc-final', team1: 'IND', team1Full: 'India', team2: 'NZ', team2Full: 'New Zealand', date: '2026-03-08', startTime: '19:30', venue: 'Narendra Modi Stadium, Ahmedabad', status: 'completed', winner: 'India', tournament: 'T20 World Cup 2026 - FINAL 🏆', category: 'icc-t20' },
+  { id: 'icc-t20wc-sf1', team1: 'NZ', team1Full: 'New Zealand', team2: 'SA', team2Full: 'South Africa', date: '2026-03-04', startTime: '19:30', venue: 'Eden Gardens, Kolkata', status: 'completed', winner: 'New Zealand', tournament: 'T20 World Cup 2026 - Semi Final 1', category: 'icc-t20', matchType: 't20', isAbroad: false },
+  { id: 'icc-t20wc-sf2', team1: 'IND', team1Full: 'India', team2: 'ENG', team2Full: 'England', date: '2026-03-05', startTime: '19:30', venue: 'Wankhede Stadium, Mumbai', status: 'completed', winner: 'India', tournament: 'T20 World Cup 2026 - Semi Final 2', category: 'icc-t20', matchType: 't20', isAbroad: false },
+  { id: 'icc-t20wc-final', team1: 'IND', team1Full: 'India', team2: 'NZ', team2Full: 'New Zealand', date: '2026-03-08', startTime: '19:30', venue: 'Narendra Modi Stadium, Ahmedabad', status: 'completed', winner: 'India', tournament: 'T20 World Cup 2026 - FINAL 🏆', category: 'icc-t20', matchType: 't20', isAbroad: false },
   // India Tour of England 2026 (T20I)
-  { id: 'eng-t20-1', team1: 'ENG', team1Full: 'England', team2: 'IND', team2Full: 'India', date: '2026-07-01', startTime: '20:00', venue: 'Riverside Ground, Chester-le-Street', status: 'upcoming', winner: null, tournament: 'India Tour of England - 1st T20I', category: 'icc-t20' },
-  { id: 'eng-t20-2', team1: 'ENG', team1Full: 'England', team2: 'IND', team2Full: 'India', date: '2026-07-04', startTime: '20:00', venue: 'Old Trafford, Manchester', status: 'upcoming', winner: null, tournament: 'India Tour of England - 2nd T20I', category: 'icc-t20' },
-  { id: 'eng-t20-3', team1: 'ENG', team1Full: 'England', team2: 'IND', team2Full: 'India', date: '2026-07-07', startTime: '20:00', venue: 'Trent Bridge, Nottingham', status: 'upcoming', winner: null, tournament: 'India Tour of England - 3rd T20I', category: 'icc-t20' },
-  { id: 'eng-t20-4', team1: 'ENG', team1Full: 'England', team2: 'IND', team2Full: 'India', date: '2026-07-09', startTime: '20:00', venue: 'County Ground, Bristol', status: 'upcoming', winner: null, tournament: 'India Tour of England - 4th T20I', category: 'icc-t20' },
-  { id: 'eng-t20-5', team1: 'ENG', team1Full: 'England', team2: 'IND', team2Full: 'India', date: '2026-07-11', startTime: '20:00', venue: 'Rose Bowl, Southampton', status: 'upcoming', winner: null, tournament: 'India Tour of England - 5th T20I', category: 'icc-t20' },
+  { id: 'eng-t20-1', team1: 'ENG', team1Full: 'England', team2: 'IND', team2Full: 'India', date: '2026-07-01', startTime: '20:00', venue: 'Riverside Ground, Chester-le-Street', status: 'upcoming', winner: null, tournament: 'India Tour of England - 1st T20I', category: 'icc-t20', matchType: 't20', isAbroad: true },
+  { id: 'eng-t20-2', team1: 'ENG', team1Full: 'England', team2: 'IND', team2Full: 'India', date: '2026-07-04', startTime: '20:00', venue: 'Old Trafford, Manchester', status: 'upcoming', winner: null, tournament: 'India Tour of England - 2nd T20I', category: 'icc-t20', matchType: 't20', isAbroad: true },
+  { id: 'eng-t20-3', team1: 'ENG', team1Full: 'England', team2: 'IND', team2Full: 'India', date: '2026-07-07', startTime: '20:00', venue: 'Trent Bridge, Nottingham', status: 'upcoming', winner: null, tournament: 'India Tour of England - 3rd T20I', category: 'icc-t20', matchType: 't20', isAbroad: true },
+  { id: 'eng-t20-4', team1: 'ENG', team1Full: 'England', team2: 'IND', team2Full: 'India', date: '2026-07-09', startTime: '20:00', venue: 'County Ground, Bristol', status: 'upcoming', winner: null, tournament: 'India Tour of England - 4th T20I', category: 'icc-t20', matchType: 't20', isAbroad: true },
+  { id: 'eng-t20-5', team1: 'ENG', team1Full: 'England', team2: 'IND', team2Full: 'India', date: '2026-07-11', startTime: '20:00', venue: 'Rose Bowl, Southampton', status: 'upcoming', winner: null, tournament: 'India Tour of England - 5th T20I', category: 'icc-t20', matchType: 't20', isAbroad: true },
   // India Tour of England 2026 (ODI)
-  { id: 'eng-odi-1', team1: 'ENG', team1Full: 'England', team2: 'IND', team2Full: 'India', date: '2026-07-14', startTime: '18:00', venue: 'Edgbaston, Birmingham', status: 'upcoming', winner: null, tournament: 'India Tour of England - 1st ODI', category: 'icc-odi' },
-  { id: 'eng-odi-2', team1: 'ENG', team1Full: 'England', team2: 'IND', team2Full: 'India', date: '2026-07-16', startTime: '18:00', venue: 'TBA', status: 'upcoming', winner: null, tournament: 'India Tour of England - 2nd ODI', category: 'icc-odi' },
-  { id: 'eng-odi-3', team1: 'ENG', team1Full: 'England', team2: 'IND', team2Full: 'India', date: '2026-07-19', startTime: '18:00', venue: 'TBA', status: 'upcoming', winner: null, tournament: 'India Tour of England - 3rd ODI', category: 'icc-odi' },
+  { id: 'eng-odi-1', team1: 'ENG', team1Full: 'England', team2: 'IND', team2Full: 'India', date: '2026-07-14', startTime: '18:00', venue: 'Edgbaston, Birmingham', status: 'upcoming', winner: null, tournament: 'India Tour of England - 1st ODI', category: 'icc-odi', matchType: 'odi', isAbroad: true },
+  { id: 'eng-odi-2', team1: 'ENG', team1Full: 'England', team2: 'IND', team2Full: 'India', date: '2026-07-16', startTime: '18:00', venue: 'TBA', status: 'upcoming', winner: null, tournament: 'India Tour of England - 2nd ODI', category: 'icc-odi', matchType: 'odi', isAbroad: true },
+  { id: 'eng-odi-3', team1: 'ENG', team1Full: 'England', team2: 'IND', team2Full: 'India', date: '2026-07-19', startTime: '18:00', venue: 'TBA', status: 'upcoming', winner: null, tournament: 'India Tour of England - 3rd ODI', category: 'icc-odi', matchType: 'odi', isAbroad: true },
   // Pakistan tour of Bangladesh 2026 (Test)
-  { id: 'ban-pak-test1', team1: 'BAN', team1Full: 'Bangladesh', team2: 'PAK', team2Full: 'Pakistan', date: '2026-05-08', startTime: '09:00', venue: 'Shere Bangla National Stadium, Dhaka', status: 'upcoming', winner: null, tournament: 'Pakistan Tour of Bangladesh - 1st Test', category: 'icc-test' },
+  { id: 'ban-pak-test1', team1: 'BAN', team1Full: 'Bangladesh', team2: 'PAK', team2Full: 'Pakistan', date: '2026-05-08', startTime: '09:00', venue: 'Shere Bangla National Stadium, Dhaka', status: 'upcoming', winner: null, tournament: 'Pakistan Tour of Bangladesh - 1st Test', category: 'icc-test', matchType: 'test', isAbroad: true },
   // Australia tour of Pakistan 2026 (ODI)
-  { id: 'pak-aus-odi1', team1: 'PAK', team1Full: 'Pakistan', team2: 'AUS', team2Full: 'Australia', date: '2026-05-30', startTime: '17:00', venue: 'Rawalpindi Cricket Stadium', status: 'upcoming', winner: null, tournament: 'Australia Tour of Pakistan - 1st ODI', category: 'icc-odi' },
-  { id: 'pak-aus-odi2', team1: 'PAK', team1Full: 'Pakistan', team2: 'AUS', team2Full: 'Australia', date: '2026-06-02', startTime: '17:00', venue: 'Gaddafi Stadium, Lahore', status: 'upcoming', winner: null, tournament: 'Australia Tour of Pakistan - 2nd ODI', category: 'icc-odi' },
-  { id: 'pak-aus-odi3', team1: 'PAK', team1Full: 'Pakistan', team2: 'AUS', team2Full: 'Australia', date: '2026-06-04', startTime: '17:00', venue: 'Gaddafi Stadium, Lahore', status: 'upcoming', winner: null, tournament: 'Australia Tour of Pakistan - 3rd ODI', category: 'icc-odi' },
+  { id: 'pak-aus-odi1', team1: 'PAK', team1Full: 'Pakistan', team2: 'AUS', team2Full: 'Australia', date: '2026-05-30', startTime: '17:00', venue: 'Rawalpindi Cricket Stadium', status: 'upcoming', winner: null, tournament: 'Australia Tour of Pakistan - 1st ODI', category: 'icc-odi', matchType: 'odi', isAbroad: true },
+  { id: 'pak-aus-odi2', team1: 'PAK', team1Full: 'Pakistan', team2: 'AUS', team2Full: 'Australia', date: '2026-06-02', startTime: '17:00', venue: 'Gaddafi Stadium, Lahore', status: 'upcoming', winner: null, tournament: 'Australia Tour of Pakistan - 2nd ODI', category: 'icc-odi', matchType: 'odi', isAbroad: true },
+  { id: 'pak-aus-odi3', team1: 'PAK', team1Full: 'Pakistan', team2: 'AUS', team2Full: 'Australia', date: '2026-06-04', startTime: '17:00', venue: 'Gaddafi Stadium, Lahore', status: 'upcoming', winner: null, tournament: 'Australia Tour of Pakistan - 3rd ODI', category: 'icc-odi', matchType: 'odi', isAbroad: true },
 ];
 
 // ======================== ORCHESTRATOR ========================
@@ -270,12 +324,14 @@ export const updateMatchesJob = async () => {
     const fetchedMatches = await fetchAllMatches();
 
     const upsertMatch = db.prepare(`
-      INSERT INTO matches (id, team1, team1Full, team2, team2Full, date, startTime, status, winner, tournament, venue, category)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO matches (id, team1, team1Full, team2, team2Full, date, startTime, status, winner, tournament, venue, category, matchType, isAbroad)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET 
         status=excluded.status, 
         winner=excluded.winner,
-        venue=CASE WHEN excluded.venue != 'TBA' THEN excluded.venue ELSE matches.venue END
+        venue=CASE WHEN excluded.venue != 'TBA' THEN excluded.venue ELSE matches.venue END,
+        matchType=excluded.matchType,
+        isAbroad=excluded.isAbroad
     `);
 
     const getVotes = db.prepare('SELECT * FROM votes WHERE matchId = ?');
@@ -283,7 +339,7 @@ export const updateMatchesJob = async () => {
     const deleteVote = db.prepare('DELETE FROM votes WHERE matchId = ? AND userId = ?');
 
     for (const match of fetchedMatches) {
-      upsertMatch.run(match.id, match.team1, match.team1Full, match.team2, match.team2Full, match.date, match.startTime, match.status, match.winner, match.tournament, match.venue || 'TBA', match.category || 'ipl');
+      upsertMatch.run(match.id, match.team1, match.team1Full, match.team2, match.team2Full, match.date, match.startTime, match.status, match.winner, match.tournament, match.venue || 'TBA', match.category || 'ipl', match.matchType || 't20', match.isAbroad ? 1 : 0);
 
       if (match.status === 'completed' && match.winner) {
         const votes = getVotes.all(match.id);

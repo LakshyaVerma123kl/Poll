@@ -1,28 +1,96 @@
-import sqlite3 from 'sqlite3';
-import { open } from 'sqlite';
+import initSqlJs from 'sql.js';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-let dbInstance = null;
+let wrapper = null;
+
+/**
+ * Thin wrapper around sql.js to provide a convenient API
+ * similar to better-sqlite3's prepare().run/get/all pattern.
+ * Also handles auto-persistence to disk.
+ */
+class DbWrapper {
+  constructor(db, dbPath) {
+    this._db = db;
+    this._dbPath = dbPath;
+  }
+
+  /** Save the in-memory database to disk */
+  _save() {
+    const data = this._db.export();
+    const buffer = Buffer.from(data);
+    fs.writeFileSync(this._dbPath, buffer);
+  }
+
+  /** Execute raw SQL (DDL, multi-statement, etc.) */
+  exec(sql) {
+    this._db.run(sql);
+    this._save();
+  }
+
+  /**
+   * Returns a pseudo-prepared statement with .run(), .get(), .all() methods.
+   * Each method auto-persists after mutations.
+   */
+  prepare(sql) {
+    const self = this;
+    const isMutating = /^\s*(INSERT|UPDATE|DELETE|REPLACE|DROP|CREATE|ALTER)/i.test(sql);
+
+    return {
+      run(...params) {
+        self._db.run(sql, params);
+        if (isMutating) self._save();
+      },
+      get(...params) {
+        const stmt = self._db.prepare(sql);
+        stmt.bind(params);
+        let row = undefined;
+        if (stmt.step()) {
+          row = stmt.getAsObject();
+        }
+        stmt.free();
+        return row;
+      },
+      all(...params) {
+        const stmt = self._db.prepare(sql);
+        stmt.bind(params);
+        const rows = [];
+        while (stmt.step()) {
+          rows.push(stmt.getAsObject());
+        }
+        stmt.free();
+        return rows;
+      }
+    };
+  }
+}
 
 export const initDb = async () => {
-  if (dbInstance) return dbInstance;
+  if (wrapper) return wrapper;
+
+  const SQL = await initSqlJs();
 
   // Use DATA_DIR for production persistent disks, otherwise default to local server directory
   const dataDir = process.env.DATA_DIR || __dirname;
   const dbPath = path.join(dataDir, 'database.sqlite');
 
-  dbInstance = await open({
-    filename: dbPath,
-    driver: sqlite3.Database
-  });
+  let db;
+  if (fs.existsSync(dbPath)) {
+    const fileBuffer = fs.readFileSync(dbPath);
+    db = new SQL.Database(fileBuffer);
+  } else {
+    db = new SQL.Database();
+  }
+
+  wrapper = new DbWrapper(db, dbPath);
 
   if (process.env.RESET_DB === 'true') {
     console.warn("⚠️ RESET_DB is true! Dropping all tables for a fresh start...");
-    await dbInstance.exec(`
+    wrapper.exec(`
       DROP TABLE IF EXISTS matches;
       DROP TABLE IF EXISTS users;
       DROP TABLE IF EXISTS votes;
@@ -30,14 +98,15 @@ export const initDb = async () => {
     console.warn("⚠️ Tables dropped. Be sure to set RESET_DB to false on next startup!");
   }
 
-  await dbInstance.exec(`
+  wrapper.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       name TEXT UNIQUE,
       points INTEGER DEFAULT 0,
       avatar TEXT
     );
-
+  `);
+  wrapper.exec(`
     CREATE TABLE IF NOT EXISTS matches (
       id TEXT PRIMARY KEY,
       team1 TEXT,
@@ -52,7 +121,8 @@ export const initDb = async () => {
       venue TEXT DEFAULT 'TBA',
       category TEXT DEFAULT 'ipl'
     );
-
+  `);
+  wrapper.exec(`
     CREATE TABLE IF NOT EXISTS votes (
       matchId TEXT,
       userId TEXT,
@@ -63,12 +133,12 @@ export const initDb = async () => {
     );
   `);
 
-  return dbInstance;
+  return wrapper;
 };
 
-export const getDb = async () => {
-  if (!dbInstance) {
-    return await initDb();
+export const getDb = () => {
+  if (!wrapper) {
+    throw new Error('Database not initialized. Call initDb() first.');
   }
-  return dbInstance;
+  return wrapper;
 };

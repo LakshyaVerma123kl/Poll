@@ -1,6 +1,6 @@
 import express from 'express';
 import cors from 'cors';
-import { getDb } from './db.js';
+import { initDb, getDb } from './db.js';
 import { updateMatchesJob } from './services/matchFetcher.js';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -29,15 +29,15 @@ app.post('/api/login', async (req, res) => {
     const { name } = req.body;
     if (!name) return res.status(400).json({ error: "Name is required" });
     
-    const db = await getDb();
+    const db = getDb();
     
-    let user = await db.get('SELECT * FROM users WHERE name COLLATE NOCASE = ?', [name]);
+    let user = db.prepare('SELECT * FROM users WHERE name COLLATE NOCASE = ?').get(name);
     
     if (!user) {
       const id = 'u' + Date.now();
       const avatar = name.charAt(0).toUpperCase();
-      await db.run('INSERT INTO users (id, name, points, avatar) VALUES (?, ?, 0, ?)', [id, name, avatar]);
-      user = await db.get('SELECT * FROM users WHERE id = ?', [id]);
+      db.prepare('INSERT INTO users (id, name, points, avatar) VALUES (?, ?, 0, ?)').run(id, name, avatar);
+      user = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
     }
     
     res.json(user);
@@ -49,8 +49,8 @@ app.post('/api/login', async (req, res) => {
 
 app.get('/api/users', async (req, res) => {
   try {
-    const db = await getDb();
-    const users = await db.all('SELECT * FROM users ORDER BY points DESC');
+    const db = getDb();
+    const users = db.prepare('SELECT * FROM users ORDER BY points DESC').all();
     res.json(users);
   } catch (err) {
     res.status(500).json({ error: "Server Error" });
@@ -59,14 +59,14 @@ app.get('/api/users', async (req, res) => {
 
 app.get('/api/matches', async (req, res) => {
   try {
-    const db = await getDb();
-    const matches = await db.all('SELECT * FROM matches');
+    const db = getDb();
+    const matches = db.prepare('SELECT * FROM matches').all();
     
     // Fetch user votes if user id is passed
     const userId = req.query.userId;
     let userVotes = [];
     if (userId) {
-      userVotes = await db.all('SELECT matchId, team FROM votes WHERE userId = ?', [userId]);
+      userVotes = db.prepare('SELECT matchId, team FROM votes WHERE userId = ?').all(userId);
     }
 
     res.json({
@@ -91,13 +91,13 @@ app.post('/api/vote', async (req, res) => {
     // const isTimeValid = (hour === 19) || (hour === 20 && minute <= 15);
     // if (!isTimeValid) return res.status(403).json({ error: "Voting is only allowed between 7 PM and 8:15 PM" });
     
-    const db = await getDb();
-    const match = await db.get('SELECT * FROM matches WHERE id = ?', [matchId]);
+    const db = getDb();
+    const match = db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId);
     if (match && match.status !== 'upcoming') {
       return res.status(400).json({ error: "Cannot vote on this match anymore" });
     }
 
-    await db.run('INSERT INTO votes (matchId, userId, team) VALUES (?, ?, ?) ON CONFLICT(matchId, userId) DO UPDATE SET team=excluded.team', [matchId, userId, team]);
+    db.prepare('INSERT INTO votes (matchId, userId, team) VALUES (?, ?, ?) ON CONFLICT(matchId, userId) DO UPDATE SET team=excluded.team').run(matchId, userId, team);
     
     res.json({ success: true, team });
   } catch (err) {
@@ -110,15 +110,15 @@ app.post('/api/vote', async (req, res) => {
 app.post('/api/admin/simulate', async (req, res) => {
   try {
     const { matchId, winner } = req.body;
-    const db = await getDb();
-    await db.run('UPDATE matches SET status = "completed", winner = ? WHERE id = ?', [winner, matchId]);
+    const db = getDb();
+    db.prepare('UPDATE matches SET status = "completed", winner = ? WHERE id = ?').run(winner, matchId);
     
     // Award points
-    const votes = await db.all('SELECT * FROM votes WHERE matchId = ?', [matchId]);
+    const votes = db.prepare('SELECT * FROM votes WHERE matchId = ?').all(matchId);
     for (const vote of votes) {
       if (vote.team === winner) {
-        await db.run('UPDATE users SET points = points + 1 WHERE id = ?', [vote.userId]);
-        await db.run('DELETE FROM votes WHERE matchId = ? AND userId = ?', [matchId, vote.userId]);
+        db.prepare('UPDATE users SET points = points + 1 WHERE id = ?').run(vote.userId);
+        db.prepare('DELETE FROM votes WHERE matchId = ? AND userId = ?').run(matchId, vote.userId);
       }
     }
     
@@ -137,8 +137,8 @@ if (process.env.NODE_ENV === 'production') {
 
 app.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
-  // Initialize DB and fetch matches on startup
-  await getDb();
+  // Initialize DB (loads WASM) and fetch matches on startup
+  await initDb();
   await updateMatchesJob();
   
   // Set up polling interval every 5 minutes to fetch matches

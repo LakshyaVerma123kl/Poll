@@ -460,26 +460,32 @@ export const scrapeMatchesFallback = async () => {
 
 export const updateMatchesJob = async () => {
   try {
-    const db = await getDb();
+    const db = getDb();
     const fetchedMatches = await fetchMatchesFromAPI();
     
+    const upsertMatch = db.prepare(`
+      INSERT INTO matches (id, team1, team1Full, team2, team2Full, date, startTime, status, winner, tournament, venue, category)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET 
+        status=excluded.status, 
+        winner=excluded.winner
+    `);
+
+    const getVotes = db.prepare('SELECT * FROM votes WHERE matchId = ?');
+    const addPoint = db.prepare('UPDATE users SET points = points + 1 WHERE id = ?');
+    const deleteVote = db.prepare('DELETE FROM votes WHERE matchId = ? AND userId = ?');
+
     for (const match of fetchedMatches) {
-      await db.run(`
-        INSERT INTO matches (id, team1, team1Full, team2, team2Full, date, startTime, status, winner, tournament, venue, category)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET 
-          status=excluded.status, 
-          winner=excluded.winner
-      `, [match.id, match.team1, match.team1Full, match.team2, match.team2Full, match.date, match.startTime, match.status, match.winner, match.tournament, match.venue || 'TBA', match.category || 'ipl']);
+      upsertMatch.run(match.id, match.team1, match.team1Full, match.team2, match.team2Full, match.date, match.startTime, match.status, match.winner, match.tournament, match.venue || 'TBA', match.category || 'ipl');
       
       // If completed, update points (1 for correct, 0 for wrong)
       if (match.status === 'completed' && match.winner) {
-        const votes = await db.all('SELECT * FROM votes WHERE matchId = ?', [match.id]);
+        const votes = getVotes.all(match.id);
         for (const vote of votes) {
           if (vote.team.toLowerCase() === match.winner.toLowerCase() || 
               match.winner.toLowerCase().includes(vote.team.toLowerCase())) {
-            await db.run('UPDATE users SET points = points + 1 WHERE id = ?', [vote.userId]);
-            await db.run('DELETE FROM votes WHERE matchId = ? AND userId = ?', [match.id, vote.userId]);
+            addPoint.run(vote.userId);
+            deleteVote.run(match.id, vote.userId);
           }
         }
       }

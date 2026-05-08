@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { initDb, getDb } from './db.js';
 import { updateMatchesJob } from './services/matchFetcher.js';
+import { getAIPrediction } from './services/aiPredictor.js';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -161,6 +162,36 @@ app.post('/api/admin/simulate', async (req, res) => {
     res.json({ success: true });
   } catch(err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// AI Prediction endpoint
+const predictionCache = new Map();
+app.get('/api/predict/:matchId', async (req, res) => {
+  try {
+    const { matchId } = req.params;
+    
+    // Check cache first (predictions valid for 1 hour)
+    const cached = predictionCache.get(matchId);
+    if (cached && Date.now() - cached.timestamp < 3600000) {
+      return res.json(cached.data);
+    }
+
+    const db = getDb();
+    const match = db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId);
+    if (!match) return res.status(404).json({ error: 'Match not found' });
+    if (match.status === 'completed') {
+      return res.json({ winner: match.winner, confidence: 100, reason: 'Match already completed', model: 'result' });
+    }
+
+    const prediction = await getAIPrediction(match);
+    if (!prediction.error) {
+      predictionCache.set(matchId, { data: prediction, timestamp: Date.now() });
+    }
+    res.json(prediction);
+  } catch (err) {
+    console.error('[AI Predict]', err);
+    res.status(500).json({ error: 'Prediction failed' });
   }
 });
 

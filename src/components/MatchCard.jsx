@@ -4,9 +4,11 @@ import { motion } from 'framer-motion';
 import confetti from 'canvas-confetti';
 
 export default function MatchCard({ match }) {
-  const { currentUser, castVote, votes } = useApp();
+  const { currentUser, castVote, votes, getAIPrediction } = useApp();
   const [canVote, setCanVote] = useState(false);
   const [timeMessage, setTimeMessage] = useState('');
+  const [aiPrediction, setAiPrediction] = useState(null);
+  const [aiLoading, setAiLoading] = useState(false);
   
   const userVote = votes[match.id]?.[currentUser?.id];
   const isCompleted = match.status === 'completed';
@@ -95,6 +97,14 @@ export default function MatchCard({ match }) {
     } else {
       alert("Voting is only allowed between 7:00 PM and 8:15 PM!");
     }
+  };
+
+  const handleAIPredict = async () => {
+    if (aiLoading || aiPrediction) return;
+    setAiLoading(true);
+    const result = await getAIPrediction(match.id);
+    setAiPrediction(result);
+    setAiLoading(false);
   };
 
   const isTeam1Winner = hasWinner && (match.winner.toLowerCase() === match.team1.toLowerCase() || match.winner.toLowerCase().includes(match.team1.toLowerCase()));
@@ -314,6 +324,68 @@ export default function MatchCard({ match }) {
           )}
         </div>
       </div>
+
+      {/* AI Prediction Section */}
+      {!isCompleted && (
+        <div style={{ marginTop: '1rem', textAlign: 'center' }}>
+          {!aiPrediction && !aiLoading && (
+            <motion.button
+              whileHover={{ scale: 1.04 }}
+              whileTap={{ scale: 0.96 }}
+              onClick={handleAIPredict}
+              style={{
+                background: 'linear-gradient(135deg, rgba(139,92,246,0.15), rgba(59,130,246,0.15))',
+                border: '1px solid rgba(139,92,246,0.3)',
+                color: '#a78bfa',
+                padding: '0.4rem 1rem',
+                borderRadius: '20px',
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontFamily: 'var(--font-heading)',
+              }}
+            >
+              ✨ AI Prediction
+            </motion.button>
+          )}
+          {aiLoading && (
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', padding: '0.5rem' }}>
+              🧠 Analyzing match...
+            </div>
+          )}
+          {aiPrediction && !aiPrediction.error && (
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              style={{
+                background: 'linear-gradient(135deg, rgba(139,92,246,0.08), rgba(59,130,246,0.08))',
+                border: '1px solid rgba(139,92,246,0.2)',
+                borderRadius: '12px',
+                padding: '0.75rem',
+                marginTop: '0.5rem',
+              }}
+            >
+              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                🤖 AI Prediction • {aiPrediction.model}
+              </div>
+              <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#a78bfa', marginBottom: '4px' }}>
+                {aiPrediction.winner} <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 500 }}>({aiPrediction.confidence}% confident)</span>
+              </div>
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                {aiPrediction.reason}
+              </div>
+            </motion.div>
+          )}
+          {aiPrediction?.error && (
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.72rem', marginTop: '0.5rem' }}>
+              ⚠️ {aiPrediction.error}
+            </div>
+          )}
+        </div>
+      )}
     </motion.div>
   );
 }

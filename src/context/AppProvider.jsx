@@ -5,8 +5,16 @@ const AppContext = createContext();
 
 export const useApp = () => useContext(AppContext);
 
-// Automatically adapts to Split Deployment (Vercel + Render), Single Service (Render), or Local Dev
-const API_BASE = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '/api' : 'http://localhost:3001/api');
+// Automatically adapts to any deployment setup
+// If VITE_API_URL is set, ensure it ends with /api
+function resolveApiBase() {
+  const envUrl = import.meta.env.VITE_API_URL;
+  if (envUrl) {
+    return envUrl.endsWith('/api') ? envUrl : `${envUrl.replace(/\/+$/, '')}/api`;
+  }
+  return import.meta.env.PROD ? '/api' : 'http://localhost:3001/api';
+}
+const API_BASE = resolveApiBase();
 
 export const AppProvider = ({ children }) => {
   const [currentUser, setCurrentUser] = useState(() => {
@@ -109,6 +117,15 @@ export const AppProvider = ({ children }) => {
     }
   };
 
+  const getAIPrediction = async (matchId) => {
+    try {
+      const res = await axios.get(`${API_BASE}/predict/${matchId}`);
+      return res.data;
+    } catch (err) {
+      return { error: 'AI prediction unavailable' };
+    }
+  };
+
   const value = {
     currentUser,
     users,
@@ -118,6 +135,7 @@ export const AppProvider = ({ children }) => {
     logout,
     castVote,
     simulateMatchEnd,
+    getAIPrediction,
   };
 
   return (

@@ -130,57 +130,47 @@ app.post('/api/vote', async (req, res) => {
       // We'll allow voting during live if still within the over-based window
     }
 
-    // ── Voting Window Calculation (all times in IST = UTC+5:30) ──
-    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-    const nowUTC = Date.now();
-    const nowIST = new Date(nowUTC + IST_OFFSET_MS);
+    // ── Voting Window Calculation (all times stored as IST) ──
+    const startTime = match.startTime || '19:30';
+    const [startH, startM] = startTime.split(':').map(Number);
 
-    // Parse match start time in IST
-    const [startH, startM] = (match.startTime || '19:30').split(':').map(Number);
-    const matchDateIST = new Date(match.date + 'T00:00:00+05:30');
-    matchDateIST.setHours(startH, startM, 0, 0);
-    const matchStartMs = matchDateIST.getTime();
+    // Build match start as IST → UTC ms using explicit +05:30 offset
+    const matchStartIST = new Date(`${match.date}T${startTime.padStart(5,'0')}:00+05:30`);
+    const matchStartMs = matchStartIST.getTime();
 
     const matchType = match.matchType || 't20';
     const isAbroad = Number(match.isAbroad) === 1;
 
-    // Over duration estimates (~4 min/over)
-    const OVER_DURATION_MS = 4 * 60 * 1000;
-    // Toss is ~30 min before match start
+    const OVER_MS = 4 * 60 * 1000;
     const TOSS_OFFSET_MS = 30 * 60 * 1000;
 
     let voteOpenMs, voteCloseMs, windowDesc;
 
     if (isAbroad) {
-      // ABROAD: Opens at 7:00 AM IST on match day, closes after ~6 overs from match start
-      const abroadOpenIST = new Date(match.date + 'T00:00:00+05:30');
-      abroadOpenIST.setHours(7, 0, 0, 0);
+      const abroadOpenIST = new Date(`${match.date}T07:00:00+05:30`);
       voteOpenMs = abroadOpenIST.getTime();
-      voteCloseMs = matchStartMs + (6 * OVER_DURATION_MS);
+      voteCloseMs = matchStartMs + (6 * OVER_MS);
       windowDesc = `7:00 AM IST to ~6 overs after start`;
     } else {
-      // INDIA: Opens at toss time (30 min before start)
       voteOpenMs = matchStartMs - TOSS_OFFSET_MS;
-
       if (matchType === 't20') {
-        // Close after ~4 overs from match start
-        voteCloseMs = matchStartMs + (4 * OVER_DURATION_MS);
+        voteCloseMs = matchStartMs + (4 * OVER_MS);
         windowDesc = `Toss to ~4 overs`;
       } else if (matchType === 'odi') {
-        // Close after ~8 overs from match start
-        voteCloseMs = matchStartMs + (8 * OVER_DURATION_MS);
+        voteCloseMs = matchStartMs + (8 * OVER_MS);
         windowDesc = `Toss to ~8 overs`;
       } else {
-        // Test: close after ~18 overs from match start
-        voteCloseMs = matchStartMs + (18 * OVER_DURATION_MS);
+        voteCloseMs = matchStartMs + (18 * OVER_MS);
         windowDesc = `Toss to ~18 overs`;
       }
     }
 
-    const nowMs = nowIST.getTime();
+    // Compare in UTC ms
+    const nowMs = Date.now();
     if (nowMs < voteOpenMs) {
-      const opensAt = new Date(voteOpenMs);
-      const timeStr = `${String(opensAt.getHours()).padStart(2,'0')}:${String(opensAt.getMinutes()).padStart(2,'0')}`;
+      let tossH = startH, tossMin = startM - 30;
+      if (tossMin < 0) { tossH--; tossMin += 60; }
+      const timeStr = isAbroad ? '07:00' : `${String(tossH).padStart(2,'0')}:${String(tossMin).padStart(2,'0')}`;
       return res.status(403).json({ error: `Voting opens at ${timeStr} IST (${windowDesc})` });
     }
     if (nowMs > voteCloseMs) {

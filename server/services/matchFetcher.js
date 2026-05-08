@@ -3,11 +3,12 @@ import * as cheerio from 'cheerio';
 import { getDb } from '../db.js';
 
 // ============================================================
-// MULTI-FALLBACK MATCH FETCHER ENGINE
-// Layer 1: CricAPI /currentMatches (live/recent)
+// MULTI-LAYER MATCH FETCHER ENGINE (Future-Proof)
+// Layer 1: CricAPI /currentMatches (live/recent) — highest priority
 // Layer 2: CricAPI /matches with pagination (upcoming schedule)
-// Layer 3: Cricbuzz scraper (live scores)
-// Layer 4: Hardcoded verified fallback data
+// Layer 3a: Cricbuzz live scores scraper
+// Layer 3b: Cricbuzz schedule scraper (international + league)
+// Layer 4: Hardcoded IPL fallback — safety net, lowest priority
 // ============================================================
 
 const AXIOS_OPTS = { timeout: 8000 };
@@ -142,7 +143,7 @@ async function fetchCurrentMatches(apiKey) {
 
 // ======================== LAYER 2 ========================
 // CricAPI /matches — full schedule with pagination
-async function fetchScheduledMatches(apiKey, maxPages = 3) {
+async function fetchScheduledMatches(apiKey, maxPages = 4) {
   console.log('[Layer 2] Fetching /matches (scheduled)...');
   let all = [];
   for (let page = 0; page < maxPages; page++) {
@@ -153,17 +154,15 @@ async function fetchScheduledMatches(apiKey, maxPages = 3) {
     if (data.status !== 'success' || !data.data || data.data.length === 0) break;
     all = all.concat(data.data);
     console.log(`[Layer 2] Page ${page + 1}: +${data.data.length} matches (total: ${all.length})`);
-    // Stop if we've fetched all rows or no more
     if (all.length >= (data.info?.totalRows || 0)) break;
-    // Conservative: limit pages to save API hits
   }
   return all.map(mapApiMatch).filter(Boolean);
 }
 
-// ======================== LAYER 3 ========================
-// Cricbuzz scraper
-async function scrapeCricbuzz() {
-  console.log('[Layer 3] Scraping Cricbuzz...');
+// ======================== LAYER 3a ========================
+// Cricbuzz LIVE scores scraper (existing)
+async function scrapeCricbuzzLive() {
+  console.log('[Layer 3a] Scraping Cricbuzz live scores...');
   const { data } = await axios.get('https://www.cricbuzz.com/cricket-match/live-scores', {
     ...AXIOS_OPTS,
     headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
@@ -174,7 +173,6 @@ async function scrapeCricbuzz() {
   $('.cb-mtch-lst').each((i, el) => {
     const matchName = $(el).find('.cb-hm-text').text() || '';
     const statusText = $(el).find('.cb-text-live, .cb-text-complete, .cb-text-preview').text() || '';
-
     if (!matchName.includes(' vs ')) return;
     if (isWomensMatch(matchName)) return;
 
@@ -183,34 +181,194 @@ async function scrapeCricbuzz() {
     const t2 = parts[1].split(',')[0].trim();
     const id = 'scrape_' + Buffer.from(matchName).toString('base64').substring(0, 12);
     const statusLower = statusText.toLowerCase();
-
     const category = categorizeMatch(matchName, 't20');
     const venue = 'TBA';
 
     matches.push({
-      id,
-      team1: getShortName(t1), team1Full: t1,
+      id, team1: getShortName(t1), team1Full: t1,
       team2: getShortName(t2), team2Full: t2,
-      date: new Date().toISOString().split('T')[0],
-      startTime: '19:30',
-      venue,
-      status: statusLower.includes('live') ? 'live' :
-              statusLower.includes('won') ? 'completed' : 'upcoming',
+      date: new Date().toISOString().split('T')[0], startTime: '19:30', venue,
+      status: statusLower.includes('live') ? 'live' : statusLower.includes('won') ? 'completed' : 'upcoming',
       winner: statusLower.includes('won') ? statusText.split(' won ')[0].trim() : null,
-      tournament: 'Live Matches',
-      category,
+      tournament: 'Live Matches', category,
       matchType: getMatchFormat(matchName, 't20', category),
       isAbroad: !isIndianVenue(venue)
     });
   });
 
-  if (matches.length === 0) throw new Error('Cricbuzz scrape returned 0 matches');
-  console.log(`[Layer 3] Scraped ${matches.length} matches from Cricbuzz`);
+  if (matches.length === 0) throw new Error('Cricbuzz live scrape returned 0 matches');
+  console.log(`[Layer 3a] Scraped ${matches.length} live matches from Cricbuzz`);
   return matches;
 }
 
+// ======================== LAYER 3b ========================
+// Cricbuzz SCHEDULE scraper — upcoming matches from schedule pages
+// Scrapes international + league schedule pages for future-proof match data
+const CB_SCHEDULE_URLS = [
+  'https://www.cricbuzz.com/cricket-schedule/upcoming-series/international',
+  'https://www.cricbuzz.com/cricket-schedule/upcoming-series/league',
+];
+const CB_HEADERS = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' };
+
+/**
+ * Parse match type from a match description string like "1st T20I", "3rd ODI", "51st Match", "1st Test"
+ */
+function parseMatchTypeFromDesc(desc) {
+  const d = (desc || '').toLowerCase();
+  if (d.includes('test')) return 'test';
+  if (d.includes('odi')) return 'odi';
+  // T20I, T20, or numbered "Match" (league matches are T20)
+  return 't20';
+}
+
+/**
+ * Parse the Cricbuzz schedule page HTML and extract upcoming matches.
+ * The schedule page has date-grouped sections with match cards containing:
+ *   - Series/tournament name
+ *   - Match description (e.g. "51st Match • Delhi, Arun Jaitley Stadium")
+ *   - Team names
+ *   - Link with match ID
+ */
+async function scrapeCricbuzzSchedule() {
+  console.log('[Layer 3b] Scraping Cricbuzz schedule pages...');
+  const allMatches = [];
+
+  for (const url of CB_SCHEDULE_URLS) {
+    try {
+      const { data } = await axios.get(url, { ...AXIOS_OPTS, headers: CB_HEADERS });
+      const $ = cheerio.load(data);
+      let currentDate = null;
+
+      // The schedule page has date headers (h2/div with date text) followed by match entries
+      // Process all elements in the schedule container
+      const scheduleContainer = $('div.cb-col-100');
+
+      // Find date headers - they look like "FRI, MAY 08 2026"
+      $('div.cb-lv-grn-strip, div.cb-sch-hdr-grn').each((i, dateEl) => {
+        const dateText = $(dateEl).text().trim();
+        // Parse date like "FRI, MAY 08 2026" or "SAT, MAY 09 2026"
+        const dateMatch = dateText.match(/\w+,\s+(\w+)\s+(\d+)\s+(\d{4})/);
+        if (dateMatch) {
+          const months = { JAN: '01', FEB: '02', MAR: '03', APR: '04', MAY: '05', JUN: '06',
+            JUL: '07', AUG: '08', SEP: '09', OCT: '10', NOV: '11', DEC: '12' };
+          const mon = months[dateMatch[1].toUpperCase()] || '01';
+          const day = dateMatch[2].padStart(2, '0');
+          currentDate = `${dateMatch[3]}-${mon}-${day}`;
+        }
+      });
+
+      // Find all match entries - each has a link to the match page
+      $('a[href*="/live-cricket-scores/"]').each((i, el) => {
+        const href = $(el).attr('href') || '';
+        const text = $(el).text().trim();
+
+        // Extract match ID from href like /live-cricket-scores/152064/dc-vs-kkr-...
+        const idMatch = href.match(/\/live-cricket-scores\/(\d+)\//);
+        if (!idMatch) return;
+
+        const matchId = 'cb_' + idMatch[1];
+
+        // Skip if we already have this match
+        if (allMatches.find(m => m.id === matchId)) return;
+
+        // Try to extract teams from the URL slug: dc-vs-kkr-51st-match-...
+        const slugMatch = href.match(/\/(\w[\w-]*)-vs-([\w-]+?)(?:-\d+\w+-match|-\d+\w+-t20i|-\d+\w+-odi|-\d+\w+-test|-semi-final|-final|-qualifier|-eliminator)/i);
+
+        // Try to extract venue and match desc from text
+        // Text patterns: "51st Match • Delhi, Arun Jaitley Stadium..." or "Delhi Capitals vs Kolkata Knight Riders, 51st Match..."
+        let venue = 'TBA';
+        let matchDesc = '';
+        let seriesName = '';
+        let team1Full = '', team2Full = '';
+
+        // Pattern 1: "Nth Match • City, Venue TeamA TeamB"
+        const bulletMatch = text.match(/^(.+?)•\s*(.+)/);
+        if (bulletMatch) {
+          matchDesc = bulletMatch[1].trim();
+          const venueAndTeams = bulletMatch[2].trim();
+          // venue is usually "City, Stadium Name"
+          const venueParts = venueAndTeams.split(/(?=[A-Z][a-z]+ (?:Super|Knight|Capitals|Indians|Challengers|Royals|Kings|Titans|Giants|Hyderabad|Riders))/);
+          if (venueParts.length > 0) venue = venueParts[0].trim();
+        }
+
+        // Pattern 2: "TeamA vs TeamB, Nth Match VenueCity, VenueName"
+        const vsMatch = text.match(/^(.+?)\s+vs\s+(.+?)(?:,\s*(.+))?$/);
+        if (vsMatch) {
+          team1Full = vsMatch[1].trim();
+          // Clean up team2 (may have match desc appended)
+          let t2raw = vsMatch[2].trim();
+          const descSplit = t2raw.match(/^(.+?)(?:\d+\w+ (?:Match|T20I|ODI|Test))/);
+          if (descSplit) {
+            team2Full = descSplit[1].trim().replace(/,\s*$/, '');
+          } else {
+            team2Full = t2raw.split(',')[0].trim();
+          }
+        }
+
+        // Try extracting teams from the URL slug if not found
+        if (!team1Full && slugMatch) {
+          const slug1 = slugMatch[1].replace(/-/g, ' ');
+          const slug2 = slugMatch[2].replace(/-/g, ' ');
+          team1Full = slug1; team2Full = slug2;
+        }
+
+        if (!team1Full || !team2Full) return;
+        if (isWomensMatch(text) || isWomensMatch(href)) return;
+
+        // Detect match type from description
+        const matchType = parseMatchTypeFromDesc(matchDesc || text || href);
+
+        // Try to get series name from parent structure
+        const parentSeries = $(el).closest('div').prevAll('a[href*="/cricket-series/"]').first().text().trim();
+        seriesName = parentSeries || matchDesc || 'Upcoming';
+
+        const category = categorizeMatch(seriesName + ' ' + matchDesc, matchType);
+
+        // Extract date from closest date header, or use the parsed currentDate
+        // Try parsing date from the surrounding context
+        let matchDate = currentDate || new Date().toISOString().split('T')[0];
+
+        // Try to find date from parent date header
+        const parentDateDiv = $(el).closest('.cb-col-100').prevAll('.cb-lv-grn-strip, .cb-sch-hdr-grn').first();
+        if (parentDateDiv.length) {
+          const dText = parentDateDiv.text().trim();
+          const dm = dText.match(/\w+,\s+(\w+)\s+(\d+)\s+(\d{4})/);
+          if (dm) {
+            const months = { JAN: '01', FEB: '02', MAR: '03', APR: '04', MAY: '05', JUN: '06',
+              JUL: '07', AUG: '08', SEP: '09', OCT: '10', NOV: '11', DEC: '12' };
+            matchDate = `${dm[3]}-${months[dm[1].toUpperCase()] || '01'}-${dm[2].padStart(2, '0')}`;
+          }
+        }
+
+        allMatches.push({
+          id: matchId,
+          team1: getShortName(team1Full),
+          team1Full,
+          team2: getShortName(team2Full),
+          team2Full,
+          date: matchDate,
+          startTime: '19:30', // Default; overridden by API if available
+          venue,
+          status: 'upcoming',
+          winner: null,
+          tournament: seriesName,
+          category,
+          matchType,
+          isAbroad: !isIndianVenue(venue)
+        });
+      });
+    } catch (err) {
+      console.warn(`[Layer 3b] Failed to scrape ${url}: ${err.message}`);
+    }
+  }
+
+  if (allMatches.length === 0) throw new Error('Cricbuzz schedule scrape returned 0 matches');
+  console.log(`[Layer 3b] Scraped ${allMatches.length} upcoming matches from Cricbuzz schedule`);
+  return allMatches;
+}
+
 // ======================== LAYER 4 ========================
-// Hardcoded verified fallback
+// Hardcoded verified fallback (IPL safety net)
 const fallbackMatches = [
   // IPL 2026 remaining league matches
   { id: 'ipl-2026-m68', team1: 'DC', team1Full: 'Delhi Capitals', team2: 'KKR', team2Full: 'Kolkata Knight Riders', date: '2026-05-08', startTime: '19:30', venue: 'Arun Jaitley Stadium, Delhi', status: 'upcoming', winner: null, tournament: 'IPL 2026', category: 'ipl', matchType: 't20', isAbroad: false },
@@ -276,28 +434,36 @@ export const fetchAllMatches = async () => {
   const layers = [];
   const errors = [];
 
-  // Always start with fallback as the base layer
+  // Layer 4 (lowest priority): Hardcoded IPL fallback
   layers.push(fallbackMatches);
   console.log(`[Layer 4] Loaded ${fallbackMatches.length} fallback matches as base`);
 
-  // Layer 3: Cricbuzz scraping
+  // Layer 3b: Cricbuzz schedule scraping (upcoming matches)
   try {
-    const scraped = await scrapeCricbuzz();
-    layers.push(scraped);
+    const scheduled = await scrapeCricbuzzSchedule();
+    layers.push(scheduled);
   } catch (err) {
-    errors.push(`[Layer 3 Cricbuzz] ${err.message}`);
+    errors.push(`[Layer 3b Cricbuzz Schedule] ${err.message}`);
+  }
+
+  // Layer 3a: Cricbuzz live scores scraping
+  try {
+    const live = await scrapeCricbuzzLive();
+    layers.push(live);
+  } catch (err) {
+    errors.push(`[Layer 3a Cricbuzz Live] ${err.message}`);
   }
 
   if (apiKey) {
-    // Layer 2: Scheduled matches
+    // Layer 2: CricAPI scheduled matches (4 pages = ~100 matches)
     try {
-      const scheduled = await fetchScheduledMatches(apiKey, 2);
+      const scheduled = await fetchScheduledMatches(apiKey, 4);
       if (scheduled.length > 0) layers.push(scheduled);
     } catch (err) {
       errors.push(`[Layer 2 /matches] ${err.message}`);
     }
 
-    // Layer 1: Current/live matches (highest priority)
+    // Layer 1: CricAPI current/live matches (highest priority)
     try {
       const current = await fetchCurrentMatches(apiKey);
       if (current.length > 0) layers.push(current);

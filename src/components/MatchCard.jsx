@@ -43,15 +43,14 @@ export default function MatchCard({ match }) {
       }
 
       // ── Voting Window (IST-aware, format-specific) ──
-      const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-      const nowUTC = Date.now();
-      const nowIST = new Date(nowUTC + IST_OFFSET_MS);
+      // All match times are stored as IST. Construct proper Date with +05:30
+      // so getTime() gives correct UTC ms, then compare with Date.now() (also UTC ms).
+      const startTime = match.startTime || '19:30';
+      const [startH, startM] = startTime.split(':').map(Number);
 
-      // Parse match start time as IST
-      const [startH, startM] = (match.startTime || '19:30').split(':').map(Number);
-      const matchDateIST = new Date(match.date + 'T00:00:00+05:30');
-      matchDateIST.setHours(startH, startM, 0, 0);
-      const matchStartMs = matchDateIST.getTime();
+      // Build match start as IST → UTC ms
+      const matchStartIST = new Date(`${match.date}T${startTime.padStart(5,'0')}:00+05:30`);
+      const matchStartMs = matchStartIST.getTime();
 
       const matchType = match.matchType || 't20';
       const isAbroad = match.isAbroad === true || match.isAbroad === 1 || match.isAbroad === '1';
@@ -63,18 +62,21 @@ export default function MatchCard({ match }) {
       let voteOpenMs, voteCloseMs, openLabel, closeLabel;
 
       if (isAbroad) {
-        const openIST = new Date(match.date + 'T00:00:00+05:30');
-        openIST.setHours(7, 0, 0, 0);
-        voteOpenMs = openIST.getTime();
+        // Opens at 7:00 AM IST on match day
+        const abroadOpenIST = new Date(`${match.date}T07:00:00+05:30`);
+        voteOpenMs = abroadOpenIST.getTime();
         voteCloseMs = matchStartMs + (6 * OVER_MS);
         openLabel = '7:00 AM IST';
         closeLabel = '~6 overs after start';
       } else {
+        // Opens at toss time (30 min before start)
         voteOpenMs = matchStartMs - TOSS_OFFSET_MS;
-        const tossDate = new Date(voteOpenMs);
-        const tossH = String(tossDate.getHours()).padStart(2, '0');
-        const tossMin = String(tossDate.getMinutes()).padStart(2, '0');
-        openLabel = `${tossH}:${tossMin} IST (Toss)`;
+
+        // Calculate toss time label in IST
+        let tossH = startH;
+        let tossMin = startM - 30;
+        if (tossMin < 0) { tossH--; tossMin += 60; }
+        openLabel = `${String(tossH).padStart(2,'0')}:${String(tossMin).padStart(2,'0')} IST (Toss)`;
 
         if (matchType === 't20') {
           voteCloseMs = matchStartMs + (4 * OVER_MS);
@@ -88,7 +90,8 @@ export default function MatchCard({ match }) {
         }
       }
 
-      const nowMs = nowIST.getTime();
+      // Compare in UTC ms (Date.now() is UTC, voteOpenMs/CloseMs are UTC)
+      const nowMs = Date.now();
 
       if (nowMs < voteOpenMs) {
         setCanVote(false);
@@ -103,7 +106,6 @@ export default function MatchCard({ match }) {
           setTimeMessage(`⏳ Opens in ${mins}m (${openLabel})`);
         }
       } else if (nowMs <= voteCloseMs) {
-        setCanVote(match.status !== 'live' || nowMs <= voteCloseMs);
         const remaining = voteCloseMs - nowMs;
         const mins = Math.floor(remaining / 60000);
         if (mins > 60) {
@@ -121,7 +123,7 @@ export default function MatchCard({ match }) {
     };
     
     checkTime();
-    const interval = setInterval(checkTime, 30000); // Check every 30s for accuracy
+    const interval = setInterval(checkTime, 30000);
     return () => clearInterval(interval);
   }, [match]);
 

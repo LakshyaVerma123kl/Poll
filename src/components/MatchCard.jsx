@@ -1,131 +1,143 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppProvider';
 import { motion } from 'framer-motion';
 import confetti from 'canvas-confetti';
 
+// ── Voting window calculation (shared helper) ──
+function calcVotingWindow(match) {
+  const startTime = match.startTime || '19:30';
+  const [startH, startM] = startTime.split(':').map(Number);
+  const matchStartIST = new Date(`${match.date}T${startTime.padStart(5,'0')}:00+05:30`);
+  const matchStartMs = matchStartIST.getTime();
+
+  const matchType = match.matchType || 't20';
+  const isAbroad = match.isAbroad === true || match.isAbroad === 1 || match.isAbroad === '1';
+  const OVER_MS = 4 * 60 * 1000;
+  const TOSS_OFFSET_MS = 30 * 60 * 1000;
+
+  let voteOpenMs, voteCloseMs, openLabel, closeLabel, overLimit;
+
+  if (isAbroad) {
+    voteOpenMs = new Date(`${match.date}T07:00:00+05:30`).getTime();
+    voteCloseMs = matchStartMs + (6 * OVER_MS);
+    openLabel = '7:00 AM IST';
+    closeLabel = '~6 overs';
+    overLimit = 6;
+  } else {
+    voteOpenMs = matchStartMs - TOSS_OFFSET_MS;
+    let tossH = startH, tossMin = startM - 30;
+    if (tossMin < 0) { tossH--; tossMin += 60; }
+    openLabel = `${String(tossH).padStart(2,'0')}:${String(tossMin).padStart(2,'0')} IST`;
+
+    if (matchType === 't20') {
+      voteCloseMs = matchStartMs + (4 * OVER_MS);
+      closeLabel = '~4 overs'; overLimit = 4;
+    } else if (matchType === 'odi') {
+      voteCloseMs = matchStartMs + (8 * OVER_MS);
+      closeLabel = '~8 overs'; overLimit = 8;
+    } else {
+      voteCloseMs = matchStartMs + (18 * OVER_MS);
+      closeLabel = '~18 overs'; overLimit = 18;
+    }
+  }
+
+  return { voteOpenMs, voteCloseMs, openLabel, closeLabel, matchType, isAbroad, overLimit, matchStartMs };
+}
+
+// ── Format badge colors ──
+const FORMAT_COLORS = {
+  t20: { bg: 'rgba(239,68,68,0.15)', border: 'rgba(239,68,68,0.4)', text: '#f87171', label: 'T20' },
+  odi: { bg: 'rgba(59,130,246,0.15)', border: 'rgba(59,130,246,0.4)', text: '#60a5fa', label: 'ODI' },
+  test: { bg: 'rgba(251,191,36,0.15)', border: 'rgba(251,191,36,0.4)', text: '#fbbf24', label: 'TEST' },
+};
+
 export default function MatchCard({ match }) {
   const { currentUser, castVote, votes, getAIPrediction } = useApp();
   const [canVote, setCanVote] = useState(false);
-  const [timeMessage, setTimeMessage] = useState('');
+  const [windowState, setWindowState] = useState('waiting'); // waiting | open | closed
+  const [countdown, setCountdown] = useState('');
+  const [progress, setProgress] = useState(0);
+  const [windowInfo, setWindowInfo] = useState(null);
   const [aiPrediction, setAiPrediction] = useState(null);
   const [aiLoading, setAiLoading] = useState(false);
+  const timerRef = useRef(null);
   
   const userVote = votes[match.id]?.[currentUser?.id];
   const isCompleted = match.status === 'completed';
   const isLive = match.status === 'live';
   const hasWinner = isCompleted && match.winner;
   
-  // Confetti trigger when match completes and user won
+  // Confetti on win
   useEffect(() => {
     if (hasWinner && userVote) {
       if (userVote.toLowerCase() === match.winner.toLowerCase() || 
           match.winner.toLowerCase().includes(userVote.toLowerCase())) {
-        const confettiKey = `confetti_${match.id}`;
-        if (!sessionStorage.getItem(confettiKey)) {
-          confetti({
-            particleCount: 150,
-            spread: 70,
-            origin: { y: 0.6 },
-            colors: ['#FBBF24', '#8B5CF6', '#3B82F6']
-          });
-          sessionStorage.setItem(confettiKey, 'true');
+        const key = `confetti_${match.id}`;
+        if (!sessionStorage.getItem(key)) {
+          confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 }, colors: ['#FBBF24', '#8B5CF6', '#3B82F6'] });
+          sessionStorage.setItem(key, 'true');
         }
       }
     }
   }, [hasWinner, match.winner, userVote, match.id]);
 
+  // ── Live countdown timer (updates every second) ──
   useEffect(() => {
-    const checkTime = () => {
-      if (match.status === 'completed') {
+    if (isCompleted) {
+      setCanVote(false);
+      setWindowState('completed');
+      setCountdown('');
+      return;
+    }
+
+    const win = calcVotingWindow(match);
+    setWindowInfo(win);
+
+    const tick = () => {
+      const now = Date.now();
+
+      if (now < win.voteOpenMs) {
+        // WAITING — countdown to open
         setCanVote(false);
-        setTimeMessage('Match Completed');
-        return;
-      }
-
-      // ── Voting Window (IST-aware, format-specific) ──
-      // All match times are stored as IST. Construct proper Date with +05:30
-      // so getTime() gives correct UTC ms, then compare with Date.now() (also UTC ms).
-      const startTime = match.startTime || '19:30';
-      const [startH, startM] = startTime.split(':').map(Number);
-
-      // Build match start as IST → UTC ms
-      const matchStartIST = new Date(`${match.date}T${startTime.padStart(5,'0')}:00+05:30`);
-      const matchStartMs = matchStartIST.getTime();
-
-      const matchType = match.matchType || 't20';
-      const isAbroad = match.isAbroad === true || match.isAbroad === 1 || match.isAbroad === '1';
-
-      // ~4 min per over
-      const OVER_MS = 4 * 60 * 1000;
-      const TOSS_OFFSET_MS = 30 * 60 * 1000;
-
-      let voteOpenMs, voteCloseMs, openLabel, closeLabel;
-
-      if (isAbroad) {
-        // Opens at 7:00 AM IST on match day
-        const abroadOpenIST = new Date(`${match.date}T07:00:00+05:30`);
-        voteOpenMs = abroadOpenIST.getTime();
-        voteCloseMs = matchStartMs + (6 * OVER_MS);
-        openLabel = '7:00 AM IST';
-        closeLabel = '~6 overs after start';
-      } else {
-        // Opens at toss time (30 min before start)
-        voteOpenMs = matchStartMs - TOSS_OFFSET_MS;
-
-        // Calculate toss time label in IST
-        let tossH = startH;
-        let tossMin = startM - 30;
-        if (tossMin < 0) { tossH--; tossMin += 60; }
-        openLabel = `${String(tossH).padStart(2,'0')}:${String(tossMin).padStart(2,'0')} IST (Toss)`;
-
-        if (matchType === 't20') {
-          voteCloseMs = matchStartMs + (4 * OVER_MS);
-          closeLabel = '~4 overs';
-        } else if (matchType === 'odi') {
-          voteCloseMs = matchStartMs + (8 * OVER_MS);
-          closeLabel = '~8 overs';
+        setWindowState('waiting');
+        const diff = win.voteOpenMs - now;
+        const h = Math.floor(diff / 3600000);
+        const m = Math.floor((diff % 3600000) / 60000);
+        const s = Math.floor((diff % 60000) / 1000);
+        if (h > 24) {
+          setCountdown(`Opens at ${win.openLabel}`);
+        } else if (h > 0) {
+          setCountdown(`${h}h ${m}m ${s}s`);
+        } else if (m > 0) {
+          setCountdown(`${m}m ${s}s`);
         } else {
-          voteCloseMs = matchStartMs + (18 * OVER_MS);
-          closeLabel = '~18 overs';
+          setCountdown(`${s}s`);
         }
-      }
-
-      // Compare in UTC ms (Date.now() is UTC, voteOpenMs/CloseMs are UTC)
-      const nowMs = Date.now();
-
-      if (nowMs < voteOpenMs) {
-        setCanVote(false);
-        const diff = voteOpenMs - nowMs;
-        const hrs = Math.floor(diff / 3600000);
-        const mins = Math.floor((diff % 3600000) / 60000);
-        if (hrs > 24) {
-          setTimeMessage(`Voting opens at ${openLabel}`);
-        } else if (hrs > 0) {
-          setTimeMessage(`⏳ Opens in ${hrs}h ${mins}m (${openLabel})`);
-        } else {
-          setTimeMessage(`⏳ Opens in ${mins}m (${openLabel})`);
-        }
-      } else if (nowMs <= voteCloseMs) {
-        const remaining = voteCloseMs - nowMs;
-        const mins = Math.floor(remaining / 60000);
-        if (mins > 60) {
-          const h = Math.floor(mins / 60);
-          const m = mins % 60;
-          setTimeMessage(`🟢 Voting Open! Closes after ${closeLabel} (~${h}h ${m}m left)`);
-        } else {
-          setTimeMessage(`🟢 Voting Open! Closes after ${closeLabel} (~${mins}m left)`);
-        }
+        setProgress(0);
+      } else if (now <= win.voteCloseMs) {
+        // OPEN — countdown to close
         setCanVote(true);
+        setWindowState('open');
+        const remaining = win.voteCloseMs - now;
+        const total = win.voteCloseMs - win.voteOpenMs;
+        const elapsed = now - win.voteOpenMs;
+        const m = Math.floor(remaining / 60000);
+        const s = Math.floor((remaining % 60000) / 1000);
+        setCountdown(`${m}m ${s}s`);
+        setProgress(Math.min(100, (elapsed / total) * 100));
       } else {
+        // CLOSED
         setCanVote(false);
-        setTimeMessage(`Voting closed (after ${closeLabel})`);
+        setWindowState('closed');
+        setCountdown('');
+        setProgress(100);
       }
     };
-    
-    checkTime();
-    const interval = setInterval(checkTime, 30000);
-    return () => clearInterval(interval);
-  }, [match]);
+
+    tick();
+    timerRef.current = setInterval(tick, 1000);
+    return () => clearInterval(timerRef.current);
+  }, [match, isCompleted]);
 
   const getTeamColor = (team) => {
     const colors = {
@@ -159,7 +171,10 @@ export default function MatchCard({ match }) {
     if (canVote) {
       castVote(match.id, team);
     } else {
-      alert(timeMessage || "Voting is not available for this match right now.");
+      const msg = windowState === 'waiting'
+        ? `Voting hasn't opened yet. ${countdown ? `Opens in ${countdown}` : ''}`
+        : `Voting window has closed for this match.`;
+      alert(msg);
     }
   };
 
@@ -174,22 +189,91 @@ export default function MatchCard({ match }) {
   const isTeam1Winner = hasWinner && (match.winner.toLowerCase() === match.team1.toLowerCase() || match.winner.toLowerCase().includes(match.team1.toLowerCase()));
   const isTeam2Winner = hasWinner && (match.winner.toLowerCase() === match.team2.toLowerCase() || match.winner.toLowerCase().includes(match.team2.toLowerCase()));
 
-  // Get status badge
+  // Format badge
+  const fmt = FORMAT_COLORS[windowInfo?.matchType || match.matchType || 't20'] || FORMAT_COLORS.t20;
+  const isAbroad = windowInfo?.isAbroad || match.isAbroad === true || match.isAbroad === 1;
+
+  // Status badge
   const getStatusBadge = () => {
-    if (isLive) {
-      return <span className="status-badge live"><span className="live-dot"></span>LIVE</span>;
-    }
-    if (isCompleted) {
-      return <span className="status-badge completed">✓ Completed</span>;
-    }
+    if (isLive) return <span className="status-badge live"><span className="live-dot"></span>LIVE</span>;
+    if (isCompleted) return <span className="status-badge completed">✓ Completed</span>;
     return <span className="status-badge upcoming">Upcoming</span>;
+  };
+
+  // Voting window section
+  const renderVotingWindow = () => {
+    if (isCompleted) return null;
+
+    const windowColor = windowState === 'open' ? '#10b981' : windowState === 'waiting' ? '#f59e0b' : '#ef4444';
+
+    return (
+      <div style={{
+        margin: '0.75rem 0',
+        padding: '0.6rem 0.75rem',
+        borderRadius: '10px',
+        background: windowState === 'open' 
+          ? 'linear-gradient(135deg, rgba(16,185,129,0.08), rgba(16,185,129,0.03))' 
+          : 'rgba(255,255,255,0.02)',
+        border: `1px solid ${windowColor}22`,
+      }}>
+        {/* Status line */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <div style={{
+              width: '8px', height: '8px', borderRadius: '50%',
+              background: windowColor,
+              boxShadow: windowState === 'open' ? `0 0 8px ${windowColor}` : 'none',
+              animation: windowState === 'open' ? 'pulse 1.5s infinite' : 'none',
+            }} />
+            <span style={{ fontSize: '0.72rem', fontWeight: 700, color: windowColor, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              {windowState === 'open' ? 'Voting Open' : windowState === 'waiting' ? 'Voting Soon' : 'Voting Closed'}
+            </span>
+          </div>
+          {countdown && (
+            <span style={{
+              fontSize: '0.78rem', fontWeight: 700, color: windowColor,
+              fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+              letterSpacing: '0.5px',
+            }}>
+              {windowState === 'open' ? `${countdown} left` : countdown}
+            </span>
+          )}
+        </div>
+
+        {/* Progress bar */}
+        {windowState !== 'completed' && (
+          <div style={{
+            width: '100%', height: '3px', borderRadius: '3px',
+            background: 'rgba(255,255,255,0.06)', overflow: 'hidden',
+          }}>
+            <motion.div
+              initial={{ width: 0 }}
+              animate={{ width: `${progress}%` }}
+              transition={{ duration: 0.5, ease: 'easeOut' }}
+              style={{
+                height: '100%', borderRadius: '3px',
+                background: windowState === 'open'
+                  ? `linear-gradient(90deg, ${windowColor}, ${windowColor}88)`
+                  : `linear-gradient(90deg, ${windowColor}44, ${windowColor}22)`,
+              }}
+            />
+          </div>
+        )}
+
+        {/* Window details */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '5px', fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+          <span>Opens: {windowInfo?.openLabel || '—'}</span>
+          <span>Closes: {windowInfo?.closeLabel || '—'}</span>
+        </div>
+      </div>
+    );
   };
 
   return (
     <motion.div 
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      whileHover={{ scale: 1.015, y: -3 }}
+      whileHover={{ scale: 1.012, y: -2 }}
       transition={{ duration: 0.35 }}
       className={`glass-panel ${isLive ? 'live-pulse' : ''}`}
       style={{ 
@@ -197,64 +281,73 @@ export default function MatchCard({ match }) {
         marginBottom: '1rem', 
         position: 'relative', 
         overflow: 'hidden',
-        borderLeft: isLive ? '3px solid #ef4444' : hasWinner ? '3px solid #fbbf24' : '3px solid transparent',
+        borderLeft: isLive ? '3px solid #ef4444' : hasWinner ? '3px solid #fbbf24' : windowState === 'open' ? '3px solid #10b981' : '3px solid transparent',
       }}
     >
-      {/* Top Row: Tournament + Status Badge */}
+      {/* Top Row: Tournament + Badges */}
       <div style={{ 
-        display: 'flex', 
-        justifyContent: 'space-between', 
-        alignItems: 'center', 
-        marginBottom: '1rem',
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center', 
+        marginBottom: '0.75rem', flexWrap: 'wrap', gap: '6px',
       }}>
-        <div style={{ 
-          fontSize: '0.7rem', 
-          fontWeight: 700, 
-          textTransform: 'uppercase', 
-          letterSpacing: '1px', 
-          color: 'var(--text-muted)',
-          background: 'rgba(255,255,255,0.04)',
-          padding: '4px 10px',
-          borderRadius: '6px'
-        }}>
-          {match.tournament}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+          {/* Format Badge */}
+          <span style={{
+            fontSize: '0.6rem', fontWeight: 800, letterSpacing: '1px',
+            padding: '2px 8px', borderRadius: '4px',
+            background: fmt.bg, border: `1px solid ${fmt.border}`, color: fmt.text,
+          }}>
+            {fmt.label}
+          </span>
+          {/* Location Badge */}
+          <span style={{
+            fontSize: '0.6rem', fontWeight: 600, letterSpacing: '0.5px',
+            padding: '2px 7px', borderRadius: '4px',
+            background: isAbroad ? 'rgba(139,92,246,0.12)' : 'rgba(16,185,129,0.12)',
+            color: isAbroad ? '#a78bfa' : '#34d399',
+            border: `1px solid ${isAbroad ? 'rgba(139,92,246,0.3)' : 'rgba(16,185,129,0.3)'}`,
+          }}>
+            {isAbroad ? '🌍 Abroad' : '🇮🇳 India'}
+          </span>
+          {/* Tournament name */}
+          <span style={{ 
+            fontSize: '0.65rem', fontWeight: 600, color: 'var(--text-muted)',
+            textTransform: 'uppercase', letterSpacing: '0.5px',
+          }}>
+            {match.tournament}
+          </span>
         </div>
         {getStatusBadge()}
       </div>
 
-      {/* Date & Venue Row */}
-      <div style={{ textAlign: 'center', marginBottom: '1.25rem' }}>
-        <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '0.25rem' }}>
-          {new Date(match.date).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} • {match.startTime}
+      {/* Date & Venue */}
+      <div style={{ textAlign: 'center', marginBottom: '0.5rem' }}>
+        <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '0.2rem' }}>
+          {new Date(match.date + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} • {match.startTime || '19:30'} IST
         </div>
         {match.venue && match.venue !== 'TBA' && (
-          <div style={{ color: 'var(--text-muted)', fontSize: '0.72rem', opacity: 0.7 }}>
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', opacity: 0.7 }}>
             📍 {match.venue}
           </div>
         )}
       </div>
 
-      {/* Winner / Voting Status */}
-      {(hasWinner || timeMessage) && (
+      {/* Winner display */}
+      {hasWinner && (
         <div style={{ 
-          textAlign: 'center', 
-          marginBottom: '1rem',
-          padding: '0.4rem 0.75rem',
-          borderRadius: '8px',
-          background: hasWinner ? 'rgba(251, 191, 36, 0.08)' : canVote ? 'rgba(16, 185, 129, 0.08)' : 'transparent',
+          textAlign: 'center', marginBottom: '0.75rem', padding: '0.4rem 0.75rem',
+          borderRadius: '8px', background: 'rgba(251, 191, 36, 0.08)',
         }}>
-          <div style={{ 
-            color: canVote ? 'var(--accent-success)' : hasWinner ? '#FBBF24' : 'var(--text-muted)', 
-            fontWeight: 600, 
-            fontSize: '0.8rem' 
-          }}>
-            {hasWinner ? `🏆 Winner: ${match.winner}` : timeMessage}
+          <div style={{ color: '#FBBF24', fontWeight: 700, fontSize: '0.85rem' }}>
+            🏆 Winner: {match.winner}
           </div>
         </div>
       )}
 
+      {/* Voting Window */}
+      {renderVotingWindow()}
+
       {/* Teams Layout */}
-      <div className="match-teams-layout" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
         {/* Team 1 */}
         <div style={{ 
           flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center',
@@ -265,7 +358,6 @@ export default function MatchCard({ match }) {
           <motion.div 
             whileHover={canVote ? { scale: 1.12 } : {}}
             whileTap={canVote ? { scale: 0.95 } : {}}
-            className="team-circle"
             style={{
               width: '72px', height: '72px', borderRadius: '50%',
               background: `linear-gradient(145deg, ${getTeamColor(match.team1)}cc 0%, ${getTeamColor(match.team1)}33 100%)`,
@@ -274,28 +366,21 @@ export default function MatchCard({ match }) {
               border: `3px solid ${userVote === match.team1 ? 'white' : 'rgba(255,255,255,0.1)'}`,
               boxShadow: userVote === match.team1 ? `0 0 25px ${getTeamColor(match.team1)}88` : `0 4px 12px rgba(0,0,0,0.3)`,
               cursor: canVote ? 'pointer' : 'default',
-              position: 'relative',
-              lineHeight: '1.2'
+              position: 'relative', lineHeight: '1.2'
             }}
             onClick={() => handleVote(match.team1)}
           >
             {isTeam1Winner && (
-              <motion.div 
-                initial={{ scale: 0, rotate: -20 }} 
-                animate={{ scale: 1, rotate: 0 }}
-                style={{ position: 'absolute', top: -14, fontSize: '1.4rem' }}
-              >👑</motion.div>
+              <motion.div initial={{ scale: 0, rotate: -20 }} animate={{ scale: 1, rotate: 0 }}
+                style={{ position: 'absolute', top: -14, fontSize: '1.4rem' }}>👑</motion.div>
             )}
             <span style={{ fontSize: '1.4rem', marginBottom: '-3px' }}>{getTeamIcon(match.team1)}</span>
             <span style={{ fontSize: '0.75rem', fontWeight: 800 }}>{match.team1}</span>
           </motion.div>
           <div style={{ 
-            fontSize: '0.8rem', 
-            color: isTeam1Winner ? '#FBBF24' : 'var(--text-secondary)', 
-            textAlign: 'center', 
-            fontWeight: isTeam1Winner ? 'bold' : 'normal',
-            maxWidth: '100px',
-            lineHeight: '1.2'
+            fontSize: '0.8rem', color: isTeam1Winner ? '#FBBF24' : 'var(--text-secondary)', 
+            textAlign: 'center', fontWeight: isTeam1Winner ? 'bold' : 'normal',
+            maxWidth: '100px', lineHeight: '1.2'
           }}>
             {match.team1Full}
           </div>
@@ -305,11 +390,14 @@ export default function MatchCard({ match }) {
               whileHover={canVote ? { scale: 1.05 } : {}}
               whileTap={canVote ? { scale: 0.95 } : {}}
               className={`btn ${userVote === match.team1 ? 'btn-primary' : 'btn-outline'}`}
-              style={{ marginTop: '0.75rem', width: '100%', padding: '0.5rem', fontSize: '0.85rem' }}
+              style={{ 
+                marginTop: '0.75rem', width: '100%', padding: '0.5rem', fontSize: '0.85rem',
+                opacity: !canVote && userVote !== match.team1 ? 0.4 : 1,
+              }}
               onClick={() => handleVote(match.team1)}
               disabled={!canVote && userVote !== match.team1}
             >
-              {userVote === match.team1 ? '✓ Voted' : 'Vote'}
+              {userVote === match.team1 ? '✓ Voted' : canVote ? '🗳️ Vote' : 'Vote'}
             </motion.button>
           )}
         </div>
@@ -320,12 +408,7 @@ export default function MatchCard({ match }) {
           opacity: hasWinner ? 0.2 : 0.6
         }}>
           <div style={{ width: '1px', height: '20px', background: 'var(--surface-border)' }}></div>
-          <div style={{ 
-            fontSize: '0.75rem', fontWeight: 800, color: 'var(--text-muted)', 
-            letterSpacing: '2px'
-          }}>
-            VS
-          </div>
+          <div style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--text-muted)', letterSpacing: '2px' }}>VS</div>
           <div style={{ width: '1px', height: '20px', background: 'var(--surface-border)' }}></div>
         </div>
 
@@ -339,7 +422,6 @@ export default function MatchCard({ match }) {
           <motion.div 
             whileHover={canVote ? { scale: 1.12 } : {}}
             whileTap={canVote ? { scale: 0.95 } : {}}
-            className="team-circle"
             style={{
               width: '72px', height: '72px', borderRadius: '50%',
               background: `linear-gradient(145deg, ${getTeamColor(match.team2)}cc 0%, ${getTeamColor(match.team2)}33 100%)`,
@@ -348,28 +430,21 @@ export default function MatchCard({ match }) {
               border: `3px solid ${userVote === match.team2 ? 'white' : 'rgba(255,255,255,0.1)'}`,
               boxShadow: userVote === match.team2 ? `0 0 25px ${getTeamColor(match.team2)}88` : `0 4px 12px rgba(0,0,0,0.3)`,
               cursor: canVote ? 'pointer' : 'default',
-              position: 'relative',
-              lineHeight: '1.2'
+              position: 'relative', lineHeight: '1.2'
             }}
             onClick={() => handleVote(match.team2)}
           >
             {isTeam2Winner && (
-              <motion.div 
-                initial={{ scale: 0, rotate: 20 }} 
-                animate={{ scale: 1, rotate: 0 }}
-                style={{ position: 'absolute', top: -14, fontSize: '1.4rem' }}
-              >👑</motion.div>
+              <motion.div initial={{ scale: 0, rotate: 20 }} animate={{ scale: 1, rotate: 0 }}
+                style={{ position: 'absolute', top: -14, fontSize: '1.4rem' }}>👑</motion.div>
             )}
             <span style={{ fontSize: '1.4rem', marginBottom: '-3px' }}>{getTeamIcon(match.team2)}</span>
             <span style={{ fontSize: '0.75rem', fontWeight: 800 }}>{match.team2}</span>
           </motion.div>
           <div style={{ 
-            fontSize: '0.8rem', 
-            color: isTeam2Winner ? '#FBBF24' : 'var(--text-secondary)', 
-            textAlign: 'center', 
-            fontWeight: isTeam2Winner ? 'bold' : 'normal',
-            maxWidth: '100px',
-            lineHeight: '1.2'
+            fontSize: '0.8rem', color: isTeam2Winner ? '#FBBF24' : 'var(--text-secondary)', 
+            textAlign: 'center', fontWeight: isTeam2Winner ? 'bold' : 'normal',
+            maxWidth: '100px', lineHeight: '1.2'
           }}>
             {match.team2Full}
           </div>
@@ -379,11 +454,14 @@ export default function MatchCard({ match }) {
               whileHover={canVote ? { scale: 1.05 } : {}}
               whileTap={canVote ? { scale: 0.95 } : {}}
               className={`btn ${userVote === match.team2 ? 'btn-primary' : 'btn-outline'}`}
-              style={{ marginTop: '0.75rem', width: '100%', padding: '0.5rem', fontSize: '0.85rem' }}
+              style={{ 
+                marginTop: '0.75rem', width: '100%', padding: '0.5rem', fontSize: '0.85rem',
+                opacity: !canVote && userVote !== match.team2 ? 0.4 : 1,
+              }}
               onClick={() => handleVote(match.team2)}
               disabled={!canVote && userVote !== match.team2}
             >
-              {userVote === match.team2 ? '✓ Voted' : 'Vote'}
+              {userVote === match.team2 ? '✓ Voted' : canVote ? '🗳️ Vote' : 'Vote'}
             </motion.button>
           )}
         </div>
@@ -400,15 +478,9 @@ export default function MatchCard({ match }) {
               style={{
                 background: 'linear-gradient(135deg, rgba(139,92,246,0.15), rgba(59,130,246,0.15))',
                 border: '1px solid rgba(139,92,246,0.3)',
-                color: '#a78bfa',
-                padding: '0.4rem 1rem',
-                borderRadius: '20px',
-                fontSize: '0.75rem',
-                fontWeight: 600,
-                cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
+                color: '#a78bfa', padding: '0.4rem 1rem', borderRadius: '20px',
+                fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer',
+                display: 'inline-flex', alignItems: 'center', gap: '6px',
                 fontFamily: 'var(--font-heading)',
               }}
             >
@@ -422,14 +494,11 @@ export default function MatchCard({ match }) {
           )}
           {aiPrediction && !aiPrediction.error && (
             <motion.div
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
+              initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
               style={{
                 background: 'linear-gradient(135deg, rgba(139,92,246,0.08), rgba(59,130,246,0.08))',
-                border: '1px solid rgba(139,92,246,0.2)',
-                borderRadius: '12px',
-                padding: '0.75rem',
-                marginTop: '0.5rem',
+                border: '1px solid rgba(139,92,246,0.2)', borderRadius: '12px',
+                padding: '0.75rem', marginTop: '0.5rem',
               }}
             >
               <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>

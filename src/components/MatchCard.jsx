@@ -2,6 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../context/AppProvider';
 import { motion } from 'framer-motion';
 import confetti from 'canvas-confetti';
+import toast from 'react-hot-toast';
+import ConfirmModal from './ConfirmModal';
+import { sounds } from '../utils/audio';
 
 // ── Voting window calculation (shared helper) ──
 function calcVotingWindow(match) {
@@ -46,6 +49,8 @@ export default function MatchCard({ match }) {
   const [windowInfo, setWindowInfo] = useState(null);
   const [aiPrediction, setAiPrediction] = useState(null);
   const [aiLoading, setAiLoading] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [selectedTeam, setSelectedTeam] = useState(null);
   const timerRef = useRef(null);
   
   const userVoteData = votes[match.id]?.[currentUser?.id];
@@ -54,14 +59,15 @@ export default function MatchCard({ match }) {
   const isLive = match.status === 'live';
   const hasWinner = isCompleted && match.winner;
   
-  // Confetti on win
+  // Confetti and sound on win
   useEffect(() => {
     if (hasWinner && userVote) {
       if (userVote.toLowerCase() === match.winner.toLowerCase() || 
           match.winner.toLowerCase().includes(userVote.toLowerCase())) {
         const key = `confetti_${match.id}`;
         if (!sessionStorage.getItem(key)) {
-          confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 }, colors: ['#FBBF24', '#8B5CF6', '#3B82F6'] });
+          sounds.success();
+          confetti({ particleCount: 200, spread: 100, origin: { y: 0.6 }, colors: ['#FBBF24', '#8B5CF6', '#3B82F6', '#10B981'] });
           sessionStorage.setItem(key, 'true');
         }
       }
@@ -154,21 +160,29 @@ export default function MatchCard({ match }) {
     return icons[team] || '🏏';
   };
 
-  const handleVote = (team) => {
+  const handleVoteClick = (team) => {
     if (userVote) {
-      alert("You have already cast your vote for this match. Votes cannot be changed!");
+      sounds.error();
+      toast.error("You have already cast your vote. Votes cannot be changed!");
       return;
     }
     if (canVote) {
-      const isSure = window.confirm(`Are you sure you want to vote for ${team}? You CANNOT change your vote later.`);
-      if (isSure) {
-        castVote(match.id, team);
-      }
+      sounds.hover();
+      setSelectedTeam(team);
+      setModalOpen(true);
     } else {
+      sounds.error();
       const msg = windowState === 'waiting'
         ? `Voting hasn't opened yet. ${countdown ? `Opens in ${countdown}` : ''}`
         : `Voting window has closed for this match.`;
-      alert(msg);
+      toast.error(msg);
+    }
+  };
+
+  const confirmVote = async () => {
+    if (selectedTeam) {
+      await castVote(match.id, selectedTeam);
+      toast.success(`Successfully locked in vote for ${selectedTeam}!`);
     }
   };
 
@@ -384,7 +398,7 @@ export default function MatchCard({ match }) {
               cursor: canVote && !userVote ? 'pointer' : 'default',
               position: 'relative', lineHeight: '1.2'
             }}
-            onClick={() => handleVote(match.team1)}
+            onClick={() => handleVoteClick(match.team1)}
           >
             {isTeam1Winner && (
               <motion.div initial={{ scale: 0, rotate: -20 }} animate={{ scale: 1, rotate: 0 }}
@@ -410,7 +424,7 @@ export default function MatchCard({ match }) {
                 marginTop: '0.75rem', width: '100%', padding: '0.5rem', fontSize: '0.85rem',
                 opacity: (!canVote || userVote) && userVote !== match.team1 ? 0.4 : 1,
               }}
-              onClick={() => handleVote(match.team1)}
+              onClick={() => handleVoteClick(match.team1)}
               disabled={!canVote || !!userVote}
             >
               {userVote === match.team1 ? '✓ Voted' : canVote ? '🗳️ Vote' : 'Vote'}
@@ -449,7 +463,7 @@ export default function MatchCard({ match }) {
               cursor: canVote && !userVote ? 'pointer' : 'default',
               position: 'relative', lineHeight: '1.2'
             }}
-            onClick={() => handleVote(match.team2)}
+            onClick={() => handleVoteClick(match.team2)}
           >
             {isTeam2Winner && (
               <motion.div initial={{ scale: 0, rotate: 20 }} animate={{ scale: 1, rotate: 0 }}
@@ -475,7 +489,7 @@ export default function MatchCard({ match }) {
                 marginTop: '0.75rem', width: '100%', padding: '0.5rem', fontSize: '0.85rem',
                 opacity: (!canVote || userVote) && userVote !== match.team2 ? 0.4 : 1,
               }}
-              onClick={() => handleVote(match.team2)}
+              onClick={() => handleVoteClick(match.team2)}
               disabled={!canVote || !!userVote}
             >
               {userVote === match.team2 ? '✓ Voted' : canVote ? '🗳️ Vote' : 'Vote'}
@@ -537,6 +551,13 @@ export default function MatchCard({ match }) {
           )}
         </div>
       )}
+      
+      <ConfirmModal 
+        isOpen={modalOpen} 
+        onClose={() => setModalOpen(false)} 
+        onConfirm={confirmVote} 
+        team={selectedTeam} 
+      />
     </motion.div>
   );
 }

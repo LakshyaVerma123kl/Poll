@@ -1,5 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
+import toast from 'react-hot-toast';
+import { sounds } from '../utils/audio';
 
 const AppContext = createContext();
 
@@ -65,15 +67,18 @@ export const AppProvider = ({ children }) => {
       const res = await axios.post(`${API_BASE}/login`, { name });
       setCurrentUser(res.data);
       localStorage.setItem('currentUser', JSON.stringify(res.data));
+      sounds.success();
+      toast.success(`Welcome to PredictX, ${res.data.name}!`);
     } catch (err) {
+      sounds.error();
       if (err.response?.status === 403 && err.response?.data?.existingUser) {
         // IP already has an account — auto-login as that user
         const existing = err.response.data.existingUser;
         setCurrentUser(existing);
         localStorage.setItem('currentUser', JSON.stringify(existing));
-        alert(`This device is already registered as "${existing.name}". Logging you in.`);
+        toast.success(`Welcome back, ${existing.name}!`);
       } else {
-        alert(err.response?.data?.error || "Login failed");
+        toast.error(err.response?.data?.error || "Login failed");
       }
     }
   };
@@ -101,7 +106,8 @@ export const AppProvider = ({ children }) => {
         }
       }));
     } catch (err) {
-      alert(err.response?.data?.error || "Failed to vote");
+      sounds.error();
+      toast.error(err.response?.data?.error || "Failed to vote");
     }
   };
 
@@ -109,8 +115,10 @@ export const AppProvider = ({ children }) => {
     try {
       await axios.post(`${API_BASE}/admin/simulate`, { matchId, winner: winnerTeam });
       fetchData(); // Refresh immediately
+      toast.success("Match simulated successfully");
     } catch (err) {
-      alert("Simulation failed");
+      sounds.error();
+      toast.error("Simulation failed");
     }
   };
 

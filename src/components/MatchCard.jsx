@@ -201,8 +201,9 @@ export default function MatchCard({ match }) {
 
   // Status badge
   const getStatusBadge = () => {
-    if (isLive) return <span className="status-badge live"><span className="live-dot"></span>LIVE</span>;
-    if (isCompleted) return <span className="status-badge completed">✓ Completed</span>;
+    if (isCompleted) return <span className="status-badge completed">✓ Finished</span>;
+    if (windowState === 'open') return <span className="status-badge live"><span className="live-dot"></span>LIVE</span>;
+    if (windowState === 'closed') return <span className="status-badge closed" style={{ background: 'rgba(239, 68, 68, 0.15)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.3)' }}>Closed</span>;
     return <span className="status-badge upcoming">Upcoming</span>;
   };
 

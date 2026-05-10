@@ -6,7 +6,7 @@ import IplTable from './IplTable';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export default function Dashboard() {
-  const { currentUser, logout, matches } = useApp();
+  const { currentUser, logout, matches, users } = useApp();
   const [activeTab, setActiveTab] = useState('ipl');
 
   // Intelligent Sorting Logic
@@ -50,7 +50,7 @@ export default function Dashboard() {
     { id: 'ipl', label: '🏏 IPL', count: iplMatches.length },
     { id: 'icc', label: '🌍 ICC', count: t20Matches.length + odiMatches.length + testMatches.length },
     { id: 'domestic', label: '🏟️ Domestic', count: domesticMatches.length },
-    { id: 'leaderboard', label: '🏆 Board', count: null },
+    { id: 'leaderboard', label: '🏆 Board', count: users ? users.length : 0 },
   ];
 
   const [iplSubTab, setIplSubTab] = useState('schedule');

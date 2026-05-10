@@ -233,7 +233,7 @@ app.post('/api/admin/simulate', async (req, res) => {
     const votes = await Vote.find({ matchId, pointsAwarded: { $ne: true } });
     for (const vote of votes) {
       if (vote.team.toLowerCase() === winner.toLowerCase() || winner.toLowerCase().includes(vote.team.toLowerCase())) {
-        await User.findOneAndUpdate({ id: vote.userId }, { $inc: { points: 1 } });
+        await User.findOneAndUpdate({ id: vote.userId }, { $inc: { points: 10 } });
       }
       // Mark vote as processed so points aren't awarded again, but keep it so it shows in the UI
       await Vote.findOneAndUpdate({ _id: vote._id }, { pointsAwarded: true });
@@ -244,6 +244,45 @@ app.post('/api/admin/simulate', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Automated points distributor for completed matches
+async function awardPointsForCompletedMatches() {
+  try {
+    const completedMatches = await Match.find({ status: 'completed', winner: { $ne: null } });
+    for (const match of completedMatches) {
+      const winnerName = match.winner.toLowerCase();
+      // The winner string from API is usually like "Gujarat Titans won by 77 runs"
+      // Or from scraping "CSK won by..."
+      
+      const pendingVotes = await Vote.find({ matchId: match.id, pointsAwarded: { $ne: true } });
+      if (pendingVotes.length === 0) continue;
+      
+      console.log(`[Points] Evaluating ${pendingVotes.length} votes for completed match: ${match.id}`);
+      for (const vote of pendingVotes) {
+        const votedTeam = vote.team.toLowerCase();
+        
+        // Ensure robust team name matching (e.g. 'CSK' in 'Chennai Super Kings won...')
+        // match.team1 / team1Full vs winner
+        const team1Short = (match.team1 || '').toLowerCase();
+        const team2Short = (match.team2 || '').toLowerCase();
+        const team1Full = (match.team1Full || '').toLowerCase();
+        const team2Full = (match.team2Full || '').toLowerCase();
+        
+        let actualWinnerShort = null;
+        if (winnerName.includes(team1Short) || winnerName.includes(team1Full)) actualWinnerShort = team1Short;
+        else if (winnerName.includes(team2Short) || winnerName.includes(team2Full)) actualWinnerShort = team2Short;
+        
+        if (actualWinnerShort === votedTeam || winnerName.includes(votedTeam)) {
+          console.log(`[Points] Awarding 10 points to user ${vote.userId} for correct prediction of ${vote.team}`);
+          await User.findOneAndUpdate({ id: vote.userId }, { $inc: { points: 10 } });
+        }
+        await Vote.findOneAndUpdate({ _id: vote._id }, { pointsAwarded: true });
+      }
+    }
+  } catch (err) {
+    console.error('[Points] Error awarding points:', err.message);
+  }
+}
 
 // Keep-alive Ping endpoint
 app.get('/api/ping', (req, res) => {
@@ -307,15 +346,22 @@ app.listen(PORT, async () => {
   await updateMatchesJob();
   
   // Set up polling interval every 45 minutes to fetch matches
-  setInterval(updateMatchesJob, 45 * 60 * 1000);
+  setInterval(async () => {
+    await updateMatchesJob();
+    await awardPointsForCompletedMatches();
+  }, 45 * 60 * 1000);
 
   // Live status updater runs every 45 minutes
   await liveStatusUpdater();
+  await awardPointsForCompletedMatches();
 
   // IPL Points Table — refresh on startup and every 45 minutes
   await refreshPointsTable();
   setInterval(refreshPointsTable, 45 * 60 * 1000);
-  setInterval(liveStatusUpdater, 45 * 60 * 1000);
+  setInterval(async () => {
+    await liveStatusUpdater();
+    await awardPointsForCompletedMatches();
+  }, 45 * 60 * 1000);
 
   // Self-ping every 14 minutes to help prevent Render sleep
   setInterval(() => {

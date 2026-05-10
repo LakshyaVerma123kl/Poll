@@ -26,7 +26,13 @@ function calcVotingWindow(match) {
     // Abroad matches: Open at 07:00 AM IST on the day of the match
     const matchDay = new Date(`${matchDate}T07:00:00+05:30`);
     voteOpenMs = matchDay.getTime();
-    openLabel = `${matchDay.toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata', month: 'short', day: 'numeric' })}, 07:00 AM IST`;
+    if (matchStartMs < voteOpenMs) {
+      voteOpenMs = matchStartMs - (30 * 60 * 1000);
+      const openTime = new Date(voteOpenMs);
+      openLabel = `${openTime.toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata', month: 'short', day: 'numeric' })}, ${openTime.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' })} IST`;
+    } else {
+      openLabel = `${matchDay.toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata', month: 'short', day: 'numeric' })}, 07:00 AM IST`;
+    }
   } else {
     // India matches: Open 30 mins prior to match
     voteOpenMs = matchStartMs - (30 * 60 * 1000);
@@ -36,9 +42,9 @@ function calcVotingWindow(match) {
 
   // Close logic based on format
   if (matchType === 'test') {
-    // Close 5 hours after start
-    voteCloseMs = matchStartMs + (5 * 60 * 60 * 1000);
-    closeLabel = `~5 hrs (Test)`;
+    // Close 6 hours after start
+    voteCloseMs = matchStartMs + (6 * 60 * 60 * 1000);
+    closeLabel = `~6 hrs (Test)`;
   } else if (matchType === 'odi') {
     // Close 3.5 hours after start
     voteCloseMs = matchStartMs + (3.5 * 60 * 60 * 1000);

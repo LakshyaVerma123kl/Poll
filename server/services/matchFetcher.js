@@ -493,6 +493,10 @@ export const updateMatchesJob = async () => {
       const existing = await Match.findOne({ id: match.id });
       const finalVenue = match.venue === 'TBA' && existing ? existing.venue : (match.venue || 'TBA');
 
+      // Don't downgrade a completed match back to upcoming/live (API might lag)
+      const finalStatus = (existing?.status === 'completed') ? 'completed' : match.status;
+      const finalWinner = existing?.winner || match.winner || null;
+
       await Match.findOneAndUpdate(
         { id: match.id },
         {
@@ -502,8 +506,8 @@ export const updateMatchesJob = async () => {
           team2Full: match.team2Full,
           date: match.date,
           startTime: match.startTime,
-          status: match.status,
-          winner: match.winner,
+          status: finalStatus,
+          winner: finalWinner,
           tournament: match.tournament,
           venue: finalVenue,
           category: match.category || 'ipl',
@@ -513,15 +517,9 @@ export const updateMatchesJob = async () => {
         { upsert: true }
       );
 
-      if (match.status === 'completed' && match.winner) {
-        const votes = await Vote.find({ matchId: match.id, pointsAwarded: { $ne: true } });
-        for (const vote of votes) {
-          if (vote.team.toLowerCase() === match.winner.toLowerCase() ||
-              match.winner.toLowerCase().includes(vote.team.toLowerCase())) {
-            await User.findOneAndUpdate({ id: vote.userId }, { $inc: { points: 1 } });
-          }
-          await Vote.findOneAndUpdate({ _id: vote._id }, { pointsAwarded: true });
-        }
+      // Award points if completed with a winner
+      if (finalStatus === 'completed' && finalWinner) {
+        await awardPointsForMatch(match.id, finalWinner);
       }
     }
 
@@ -531,5 +529,228 @@ export const updateMatchesJob = async () => {
   }
 };
 
+// ======================== POINTS AWARDING ========================
+async function awardPointsForMatch(matchId, winner) {
+  try {
+    const votes = await Vote.find({ matchId, pointsAwarded: { $ne: true } });
+    if (votes.length === 0) return;
+
+    let awarded = 0;
+    for (const vote of votes) {
+      const votedTeam = vote.team.toLowerCase();
+      const winnerLower = winner.toLowerCase();
+      if (votedTeam === winnerLower || winnerLower.includes(votedTeam)) {
+        await User.findOneAndUpdate({ id: vote.userId }, { $inc: { points: 1 } });
+        awarded++;
+      }
+      await Vote.findOneAndUpdate({ _id: vote._id }, { pointsAwarded: true });
+    }
+    if (awarded > 0) {
+      console.log(`🏆 Awarded points to ${awarded}/${votes.length} voters for match ${matchId} (winner: ${winner})`);
+    }
+  } catch (e) {
+    console.error(`[Points] Error awarding for ${matchId}:`, e.message);
+  }
+}
+
+// ======================== LIVE STATUS UPDATER ========================
+// Runs every 2 minutes to check live scores and auto-update match status.
+// This is separate from the full match fetcher which runs every 5 minutes.
+// It checks if any of our DB matches have gone live or completed.
+export const liveStatusUpdater = async () => {
+  try {
+    // Get all non-completed matches from our DB
+    const activeMatches = await Match.find({ status: { $ne: 'completed' } });
+    if (activeMatches.length === 0) return;
+
+    console.log(`[LiveUpdater] Checking ${activeMatches.length} active matches...`);
+
+    // ── Strategy 1: Use CricAPI /currentMatches for authoritative live data ──
+    const apiKey = process.env.CRIC_API_KEY;
+    let apiLiveData = [];
+    if (apiKey) {
+      try {
+        const { data } = await axios.get(
+          `https://api.cricapi.com/v1/currentMatches?apikey=${apiKey}&offset=0`, AXIOS_OPTS
+        );
+        if (data.status === 'success' && data.data) {
+          apiLiveData = data.data;
+          console.log(`[LiveUpdater] CricAPI returned ${apiLiveData.length} current matches`);
+        }
+      } catch (e) {
+        console.warn(`[LiveUpdater] CricAPI failed: ${e.message}`);
+      }
+    }
+
+    // ── Strategy 2: Scrape Cricbuzz for live score status ──
+    let cricbuzzStatuses = [];
+    try {
+      const { data: html } = await axios.get('https://www.cricbuzz.com/cricket-match/live-scores', {
+        timeout: 8000,
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
+      });
+      const $ = cheerio.load(html);
+
+      // Scrape all match entries from Cricbuzz live page
+      $('div.cb-mtch-lst').each((i, el) => {
+        const title = $(el).find('.cb-lv-scrs-well-complete, .cb-lv-scrs-well').text().trim();
+        const statusEl = $(el).find('.cb-text-live, .cb-text-complete, .cb-text-preview, .cb-text-stumps, .cb-text-inprogress');
+        const statusText = statusEl.text().trim();
+        const allText = $(el).text().trim();
+
+        cricbuzzStatuses.push({ title, statusText, allText });
+      });
+
+      console.log(`[LiveUpdater] Cricbuzz scraped ${cricbuzzStatuses.length} score entries`);
+    } catch (e) {
+      console.warn(`[LiveUpdater] Cricbuzz scrape failed: ${e.message}`);
+    }
+
+    // ── Match status against our DB matches ──
+    let updatedCount = 0;
+    for (const dbMatch of activeMatches) {
+      let newStatus = null;
+      let detectedWinner = null;
+
+      // --- Check CricAPI data ---
+      if (apiLiveData.length > 0) {
+        // Match by teams (both shortnames and full names)
+        const apiMatch = apiLiveData.find(am => {
+          const teams = (am.teams || []).map(t => t.toLowerCase());
+          const t1 = dbMatch.team1.toLowerCase();
+          const t2 = dbMatch.team2.toLowerCase();
+          const t1f = (dbMatch.team1Full || '').toLowerCase();
+          const t2f = (dbMatch.team2Full || '').toLowerCase();
+
+          return (teams.some(t => t.includes(t1f) || t1f.includes(t)) &&
+                  teams.some(t => t.includes(t2f) || t2f.includes(t))) ||
+                 (am.teamInfo?.some(ti => ti.shortname?.toLowerCase() === t1) &&
+                  am.teamInfo?.some(ti => ti.shortname?.toLowerCase() === t2));
+        });
+
+        if (apiMatch) {
+          if (apiMatch.matchEnded) {
+            newStatus = 'completed';
+            // CricAPI's `status` field contains the result string like "Mumbai Indians won by 5 wickets"
+            const resultStr = apiMatch.status || '';
+            detectedWinner = extractWinnerFromResult(resultStr, dbMatch);
+          } else if (apiMatch.matchStarted) {
+            newStatus = 'live';
+          }
+        }
+      }
+
+      // --- Fallback: Check Cricbuzz data ---
+      if (!newStatus && cricbuzzStatuses.length > 0) {
+        const t1 = dbMatch.team1.toLowerCase();
+        const t2 = dbMatch.team2.toLowerCase();
+        const t1f = (dbMatch.team1Full || '').toLowerCase();
+        const t2f = (dbMatch.team2Full || '').toLowerCase();
+
+        for (const cb of cricbuzzStatuses) {
+          const txt = cb.allText.toLowerCase();
+          // Check if this Cricbuzz entry mentions both teams
+          const hasTeam1 = txt.includes(t1) || txt.includes(t1f);
+          const hasTeam2 = txt.includes(t2) || txt.includes(t2f);
+
+          if (hasTeam1 && hasTeam2) {
+            const stLow = cb.statusText.toLowerCase();
+
+            if (stLow.includes('won') || stLow.includes('beat') || stLow.includes('result')) {
+              newStatus = 'completed';
+              detectedWinner = extractWinnerFromResult(cb.statusText, dbMatch);
+            } else if (stLow.includes('live') || stLow.includes('batting') || stLow.includes('bowling') ||
+                       stLow.includes('innings break') || stLow.includes('strategic timeout') ||
+                       stLow.includes('over')) {
+              newStatus = 'live';
+            }
+            break;
+          }
+        }
+      }
+
+      // --- Fallback: Time-based status inference ---
+      if (!newStatus) {
+        const startTime = dbMatch.startTime || '19:30';
+        const matchStartMs = new Date(`${dbMatch.date}T${startTime.padStart(5,'0')}:00+05:30`).getTime();
+        const now = Date.now();
+
+        if (dbMatch.status === 'upcoming' && now >= matchStartMs) {
+          // Match should have started
+          newStatus = 'live';
+        }
+        // If 5+ hours have passed since match start, assume completed
+        if (now >= matchStartMs + (5 * 60 * 60 * 1000)) {
+          newStatus = 'completed';
+        }
+      }
+
+      // --- Apply updates ---
+      if (newStatus && newStatus !== dbMatch.status) {
+        const updateFields = { status: newStatus };
+        if (detectedWinner) updateFields.winner = detectedWinner;
+
+        await Match.findOneAndUpdate({ id: dbMatch.id }, updateFields);
+        updatedCount++;
+        console.log(`[LiveUpdater] ${dbMatch.team1} vs ${dbMatch.team2}: ${dbMatch.status} → ${newStatus}${detectedWinner ? ` (Winner: ${detectedWinner})` : ''}`);
+
+        // Award points immediately when a winner is detected
+        if (newStatus === 'completed' && detectedWinner) {
+          await awardPointsForMatch(dbMatch.id, detectedWinner);
+        }
+      }
+    }
+
+    if (updatedCount > 0) {
+      console.log(`[LiveUpdater] Updated ${updatedCount} match statuses`);
+    }
+  } catch (err) {
+    console.error('[LiveUpdater] Error:', err.message);
+  }
+};
+
+/**
+ * Extract the winning team from a result string like "Mumbai Indians won by 5 wickets"
+ * Returns the team short name or full name that matches one of the two teams.
+ */
+function extractWinnerFromResult(resultStr, dbMatch) {
+  if (!resultStr) return null;
+  const r = resultStr.toLowerCase();
+
+  // Check full team names first (more specific)
+  const t1f = (dbMatch.team1Full || '').toLowerCase();
+  const t2f = (dbMatch.team2Full || '').toLowerCase();
+  if (t1f && r.includes(t1f.split(' ')[0]) && (r.includes('won') || r.includes('beat'))) {
+    // Check if team1's name appears before "won"
+    const wonIdx = r.indexOf('won');
+    const beatIdx = r.indexOf('beat');
+    const actionIdx = wonIdx >= 0 ? wonIdx : beatIdx;
+    if (actionIdx >= 0) {
+      const beforeAction = r.substring(0, actionIdx);
+      if (beforeAction.includes(t1f.split(' ')[0])) return dbMatch.team1Full;
+      if (beforeAction.includes(t2f.split(' ')[0])) return dbMatch.team2Full;
+    }
+  }
+
+  // Check short names
+  const t1 = dbMatch.team1.toLowerCase();
+  const t2 = dbMatch.team2.toLowerCase();
+  if (r.includes(t1) && (r.indexOf(t1) < r.indexOf('won') || r.indexOf(t1) < r.indexOf('beat'))) {
+    return dbMatch.team1Full || dbMatch.team1;
+  }
+  if (r.includes(t2) && (r.indexOf(t2) < r.indexOf('won') || r.indexOf(t2) < r.indexOf('beat'))) {
+    return dbMatch.team2Full || dbMatch.team2;
+  }
+
+  // Last resort: whichever team name appears first in the result string
+  const idx1 = r.indexOf(t1);
+  const idx2 = r.indexOf(t2);
+  if (idx1 >= 0 && (idx2 < 0 || idx1 < idx2)) return dbMatch.team1Full || dbMatch.team1;
+  if (idx2 >= 0) return dbMatch.team2Full || dbMatch.team2;
+
+  return null;
+}
+
 // Keep backward compat
 export { fetchAllMatches as fetchMatchesFromAPI };
+

@@ -1,27 +1,49 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
+import axios from 'axios';
+
+// Resolve API base same way as AppProvider
+function resolveApiBase() {
+  const envUrl = import.meta.env.VITE_API_URL;
+  if (envUrl) {
+    return envUrl.endsWith('/api') ? envUrl : `${envUrl.replace(/\/+$/, '')}/api`;
+  }
+  return import.meta.env.PROD ? '/api' : 'http://localhost:3001/api';
+}
+const API_BASE = resolveApiBase();
 
 export default function IplTable() {
-  // Actual IPL 2026 Points Table Standings (as of May 7, 2026)
-  const standings = [
-    { rank: 1, team: 'SRH', name: 'Sunrisers Hyderabad', pld: 11, w: 7, l: 4, nr: 0, pts: 14, nrr: '+0.737' },
-    { rank: 2, team: 'PBKS', name: 'Punjab Kings', pld: 10, w: 6, l: 3, nr: 1, pts: 13, nrr: '+0.571' },
-    { rank: 3, team: 'RCB', name: 'Royal Challengers Bengaluru', pld: 9, w: 6, l: 3, nr: 0, pts: 12, nrr: '+1.420' },
-    { rank: 4, team: 'RR', name: 'Rajasthan Royals', pld: 10, w: 6, l: 4, nr: 0, pts: 12, nrr: '+0.510' },
-    { rank: 5, team: 'GT', name: 'Gujarat Titans', pld: 10, w: 6, l: 4, nr: 0, pts: 12, nrr: '-0.147' },
-    { rank: 6, team: 'CSK', name: 'Chennai Super Kings', pld: 10, w: 5, l: 5, nr: 0, pts: 10, nrr: '+0.151' },
-    { rank: 7, team: 'DC', name: 'Delhi Capitals', pld: 10, w: 4, l: 6, nr: 0, pts: 8, nrr: '-0.949' },
-    { rank: 8, team: 'KKR', name: 'Kolkata Knight Riders', pld: 9, w: 3, l: 5, nr: 1, pts: 7, nrr: '-0.539' },
-    { rank: 9, team: 'MI', name: 'Mumbai Indians', pld: 10, w: 3, l: 7, nr: 0, pts: 6, nrr: '-0.649' },
-    { rank: 10, team: 'LSG', name: 'Lucknow Super Giants', pld: 10, w: 2, l: 8, nr: 0, pts: 4, nrr: '-1.106' },
-  ];
+  const [standings, setStandings] = useState([]);
+  const [source, setSource] = useState('');
+  const [updatedAt, setUpdatedAt] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  const fetchStandings = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/ipl-standings`);
+      setStandings(res.data.standings || []);
+      setSource(res.data.source || '');
+      setUpdatedAt(res.data.updatedAt || '');
+      setLoading(false);
+    } catch (err) {
+      console.error('Failed to fetch IPL standings', err);
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchStandings();
+    // Refresh every 5 minutes on the frontend
+    const interval = setInterval(fetchStandings, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   const getTeamIcon = (team) => {
     const icons = {
       'CSK': '🦁', 'MI': '🌪️', 'RCB': '👑', 'KKR': '💜', 'SRH': '🦅', 
       'RR': '🏰', 'DC': '🐅', 'PBKS': '🛡️', 'GT': '⚡', 'LSG': '🏹'
     };
-    return icons[team] || '';
+    return icons[team] || '🏏';
   };
 
   const getTeamColor = (team) => {
@@ -33,6 +55,39 @@ export default function IplTable() {
     };
     return colors[team] || '#6366f1';
   };
+
+  const formatUpdatedTime = () => {
+    if (!updatedAt) return '';
+    try {
+      const d = new Date(updatedAt);
+      return d.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    } catch {
+      return '';
+    }
+  };
+
+  const getSourceLabel = () => {
+    if (source === 'cricbuzz') return '🟢 Live';
+    if (source === 'espn') return '🟢 Live';
+    if (source === 'cache') return '🔵 Cached';
+    if (source === 'stale-cache') return '🟡 Stale';
+    if (source === 'fallback') return '🟠 Offline';
+    return '';
+  };
+
+  if (loading) {
+    return (
+      <motion.div 
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        className="glass-panel" 
+        style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}
+      >
+        <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>📊</div>
+        Loading IPL Standings...
+      </motion.div>
+    );
+  }
 
   return (
     <motion.div 
@@ -57,14 +112,27 @@ export default function IplTable() {
             Top 4 qualify for Playoffs
           </p>
         </div>
-        <div style={{ 
-          fontSize: '0.65rem', 
-          color: 'var(--text-muted)', 
-          background: 'rgba(255,255,255,0.04)', 
-          padding: '4px 8px', 
-          borderRadius: '6px' 
-        }}>
-          Updated: May 7
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '2px' }}>
+          {getSourceLabel() && (
+            <div style={{ 
+              fontSize: '0.6rem', 
+              color: 'var(--text-muted)', 
+              background: 'rgba(255,255,255,0.04)', 
+              padding: '2px 6px', 
+              borderRadius: '4px' 
+            }}>
+              {getSourceLabel()}
+            </div>
+          )}
+          <div style={{ 
+            fontSize: '0.6rem', 
+            color: 'var(--text-muted)', 
+            background: 'rgba(255,255,255,0.04)', 
+            padding: '2px 6px', 
+            borderRadius: '4px' 
+          }}>
+            {formatUpdatedTime() || 'Updating...'}
+          </div>
         </div>
       </div>
 
@@ -153,6 +221,12 @@ export default function IplTable() {
           </tbody>
         </table>
       </div>
+
+      {standings.length === 0 && !loading && (
+        <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+          No standings data available yet.
+        </div>
+      )}
     </motion.div>
   );
 }

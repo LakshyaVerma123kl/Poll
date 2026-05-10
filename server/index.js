@@ -1,8 +1,9 @@
 import express from 'express';
 import cors from 'cors';
 import { connectDb, User, Match, Vote } from './db.js';
-import { updateMatchesJob } from './services/matchFetcher.js';
+import { updateMatchesJob, liveStatusUpdater } from './services/matchFetcher.js';
 import { getAIPrediction } from './services/aiPredictor.js';
+import { getIplStandings, refreshPointsTable } from './services/pointsTableScraper.js';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -251,6 +252,17 @@ app.get('/api/predict/:matchId', async (req, res) => {
   }
 });
 
+// IPL Points Table endpoint
+app.get('/api/ipl-standings', async (req, res) => {
+  try {
+    const result = await getIplStandings();
+    res.json(result);
+  } catch (err) {
+    console.error('[IPL Standings]', err);
+    res.status(500).json({ error: 'Failed to fetch standings' });
+  }
+});
+
 // Catch-all route to serve React app for non-API requests in production
 if (process.env.NODE_ENV === 'production') {
   app.get('/{*splat}', (req, res) => {
@@ -269,6 +281,14 @@ app.listen(PORT, async () => {
   
   // Set up polling interval every 5 minutes to fetch matches
   setInterval(updateMatchesJob, 5 * 60 * 1000);
+
+  // Live status updater runs every 2 minutes for fast match status detection
+  await liveStatusUpdater();
+
+  // IPL Points Table — refresh on startup and every 10 minutes
+  await refreshPointsTable();
+  setInterval(refreshPointsTable, 10 * 60 * 1000);
+  setInterval(liveStatusUpdater, 2 * 60 * 1000);
 
   // Self-ping every 14 minutes to help prevent Render sleep
   setInterval(() => {

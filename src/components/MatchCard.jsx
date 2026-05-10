@@ -213,17 +213,36 @@ export default function MatchCard({ match }) {
   const renderVoters = (voters) => {
     if (voters.length === 0) return null;
     return (
-      <div style={{ display: 'flex', justifyContent: 'center', marginTop: '8px', flexWrap: 'wrap', gap: '4px' }}>
-        {voters.map((v, i) => (
-          <div key={`${v.name}-${i}`} title={v.name} style={{
-            width: '22px', height: '22px', borderRadius: '50%',
-            background: 'var(--gradient-primary)', color: '#fff',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: '0.65rem', fontWeight: 'bold', border: '1.5px solid var(--background)'
-          }}>
-            {v.avatar}
-          </div>
-        ))}
+      <div style={{ display: 'flex', justifyContent: 'center', marginTop: '10px', flexWrap: 'wrap', gap: '6px' }}>
+        {voters.map((v, i) => {
+          const isMe = currentUser?.name === v.name;
+          return (
+            <div key={`${v.name}-${i}`} style={{
+              display: 'flex', alignItems: 'center', gap: '5px',
+              padding: '3px 8px 3px 3px', borderRadius: '14px',
+              background: isMe ? 'rgba(139, 92, 246, 0.2)' : 'rgba(255, 255, 255, 0.05)',
+              border: `1px solid ${isMe ? 'rgba(139, 92, 246, 0.4)' : 'rgba(255, 255, 255, 0.1)'}`,
+              transition: 'all 0.2s ease',
+            }}>
+              <div style={{
+                width: '20px', height: '20px', borderRadius: '50%',
+                background: isMe ? 'var(--gradient-primary)' : 'rgba(255,255,255,0.1)', color: '#fff',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: '0.6rem', fontWeight: 'bold'
+              }}>
+                {v.avatar}
+              </div>
+              <span style={{ 
+                fontSize: '0.65rem', 
+                color: isMe ? '#a78bfa' : 'var(--text-secondary)', 
+                fontWeight: isMe ? 700 : 500, 
+                whiteSpace: 'nowrap' 
+              }}>
+                {v.name.split(' ')[0]} {isMe && '(You)'}
+              </span>
+            </div>
+          );
+        })}
       </div>
     );
   };
@@ -375,9 +394,9 @@ export default function MatchCard({ match }) {
       {renderVotingWindow()}
 
       {/* Teams Layout */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
+      <div className="match-teams-layout" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
         {/* Team 1 */}
-        <div style={{ 
+        <div className="team-col" style={{ 
           flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center',
           opacity: hasWinner && !isTeam1Winner ? 0.25 : 1,
           filter: hasWinner && !isTeam1Winner ? 'grayscale(100%)' : 'none',
@@ -386,6 +405,7 @@ export default function MatchCard({ match }) {
           <motion.div 
             whileHover={canVote ? { scale: 1.12 } : {}}
             whileTap={canVote ? { scale: 0.95 } : {}}
+            className="team-circle"
             style={{
               width: '72px', height: '72px', borderRadius: '50%',
               background: `linear-gradient(145deg, ${getTeamColor(match.team1)}cc 0%, ${getTeamColor(match.team1)}33 100%)`,
@@ -402,10 +422,10 @@ export default function MatchCard({ match }) {
               <motion.div initial={{ scale: 0, rotate: -20 }} animate={{ scale: 1, rotate: 0 }}
                 style={{ position: 'absolute', top: -14, fontSize: '1.4rem' }}>👑</motion.div>
             )}
-            <span style={{ fontSize: '1.4rem', marginBottom: '-3px' }}>{getTeamIcon(match.team1)}</span>
-            <span style={{ fontSize: '0.75rem', fontWeight: 800 }}>{match.team1}</span>
+            <span className="team-icon" style={{ fontSize: '1.4rem', marginBottom: '-3px' }}>{getTeamIcon(match.team1)}</span>
+            <span className="team-name" style={{ fontSize: '0.75rem', fontWeight: 800 }}>{match.team1}</span>
           </motion.div>
-          <div style={{ 
+          <div className="team-full-name" style={{ 
             fontSize: '0.8rem', color: isTeam1Winner ? '#FBBF24' : 'var(--text-secondary)', 
             textAlign: 'center', fontWeight: isTeam1Winner ? 'bold' : 'normal',
             maxWidth: '100px', lineHeight: '1.2'
@@ -417,7 +437,7 @@ export default function MatchCard({ match }) {
             <motion.button 
               whileHover={canVote && !userVote ? { scale: 1.05 } : {}}
               whileTap={canVote && !userVote ? { scale: 0.95 } : {}}
-              className={`btn ${userVote === match.team1 ? 'btn-primary' : 'btn-outline'}`}
+              className={`btn ${userVote === match.team1 ? 'btn-primary' : 'btn-outline'} vote-btn`}
               style={{ 
                 marginTop: '0.75rem', width: '100%', padding: '0.5rem', fontSize: '0.85rem',
                 opacity: (!canVote || userVote) && userVote !== match.team1 ? 0.4 : 1,
@@ -432,17 +452,17 @@ export default function MatchCard({ match }) {
         </div>
 
         {/* VS Divider */}
-        <div style={{ 
+        <div className="vs-divider" style={{ 
           display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px',
           opacity: hasWinner ? 0.2 : 0.6
         }}>
-          <div style={{ width: '1px', height: '20px', background: 'var(--surface-border)' }}></div>
-          <div style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--text-muted)', letterSpacing: '2px' }}>VS</div>
-          <div style={{ width: '1px', height: '20px', background: 'var(--surface-border)' }}></div>
+          <div className="vs-line" style={{ width: '1px', height: '20px', background: 'var(--surface-border)' }}></div>
+          <div className="vs-text" style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--text-muted)', letterSpacing: '2px' }}>VS</div>
+          <div className="vs-line" style={{ width: '1px', height: '20px', background: 'var(--surface-border)' }}></div>
         </div>
 
         {/* Team 2 */}
-        <div style={{ 
+        <div className="team-col" style={{ 
           flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center',
           opacity: hasWinner && !isTeam2Winner ? 0.25 : 1,
           filter: hasWinner && !isTeam2Winner ? 'grayscale(100%)' : 'none',
@@ -451,6 +471,7 @@ export default function MatchCard({ match }) {
           <motion.div 
             whileHover={canVote ? { scale: 1.12 } : {}}
             whileTap={canVote ? { scale: 0.95 } : {}}
+            className="team-circle"
             style={{
               width: '72px', height: '72px', borderRadius: '50%',
               background: `linear-gradient(145deg, ${getTeamColor(match.team2)}cc 0%, ${getTeamColor(match.team2)}33 100%)`,
@@ -467,8 +488,8 @@ export default function MatchCard({ match }) {
               <motion.div initial={{ scale: 0, rotate: 20 }} animate={{ scale: 1, rotate: 0 }}
                 style={{ position: 'absolute', top: -14, fontSize: '1.4rem' }}>👑</motion.div>
             )}
-            <span style={{ fontSize: '1.4rem', marginBottom: '-3px' }}>{getTeamIcon(match.team2)}</span>
-            <span style={{ fontSize: '0.75rem', fontWeight: 800 }}>{match.team2}</span>
+            <span className="team-icon" style={{ fontSize: '1.4rem', marginBottom: '-3px' }}>{getTeamIcon(match.team2)}</span>
+            <span className="team-name" style={{ fontSize: '0.75rem', fontWeight: 800 }}>{match.team2}</span>
           </motion.div>
           <div style={{ 
             fontSize: '0.8rem', color: isTeam2Winner ? '#FBBF24' : 'var(--text-secondary)', 

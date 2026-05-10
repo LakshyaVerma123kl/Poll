@@ -155,17 +155,44 @@ app.post('/api/vote', async (req, res) => {
 
     // ── Voting Window Calculation (all times stored as IST) ──
     const startTime = match.startTime || '19:30';
-    const [startH, startM] = startTime.split(':').map(Number);
 
     // Build match start as IST → UTC ms using explicit +05:30 offset
     const matchStartIST = new Date(`${match.date}T${startTime.padStart(5,'0')}:00+05:30`);
     const matchStartMs = matchStartIST.getTime();
 
-    // Open 30 mins prior to match
-    let voteOpenMs = matchStartMs - (30 * 60 * 1000);
-    // Close 1.25 hours (75 mins) after match start
-    let voteCloseMs = matchStartMs + (75 * 60 * 1000);
-    let windowDesc = `30m before match to 1.25 hrs after start`;
+    // 1. Determine Open Time (Toss vs 7 AM)
+    let voteOpenMs;
+    if (match.isAbroad) {
+      // 7:00 AM IST of the match day
+      const sevenAmIST = new Date(`${match.date}T07:00:00+05:30`);
+      voteOpenMs = sevenAmIST.getTime();
+      // If match starts before 7 AM, fallback to 30 mins before
+      if (matchStartMs < voteOpenMs) {
+        voteOpenMs = matchStartMs - (30 * 60 * 1000);
+      }
+    } else {
+      // India: Opens at Toss (30 mins before match)
+      voteOpenMs = matchStartMs - (30 * 60 * 1000);
+    }
+
+    // 2. Determine Close Time (Format-specific duration)
+    let durationMins;
+    const format = match.matchType || 't20';
+    if (format === 't20') {
+      durationMins = 75; // 1.25 hours
+    } else if (format === 'odi') {
+      durationMins = 3.5 * 60; // 3.5 hours
+    } else if (format === 'test') {
+      durationMins = 6 * 60; // Close at end of Day 1
+    } else {
+      durationMins = 75;
+    }
+
+    const voteCloseMs = matchStartMs + (durationMins * 60 * 1000);
+    
+    let windowDesc = match.isAbroad 
+      ? `7 AM IST to ${durationMins / 60} hrs after start` 
+      : `Toss (30m before) to ${durationMins / 60} hrs after start`;
 
     // Compare in UTC ms
     const nowMs = Date.now();

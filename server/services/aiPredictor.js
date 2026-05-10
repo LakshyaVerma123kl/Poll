@@ -1,22 +1,29 @@
 import axios from 'axios';
 import { Match } from '../db.js';
+import { getIplStandings } from './pointsTableScraper.js';
 
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
 // ── IPL 2026 Squad Knowledge Base ──
 // Gives the AI actual roster context so it can reference real players
 const IPL_SQUADS = {
-  CSK: 'Ruturaj Gaikwad (c), MS Dhoni (wk), Devon Conway, Shivam Dube, Ravindra Jadeja, Deepak Chahar, Tushar Deshpande, Matheesha Pathirana, Rachin Ravindra, Maheesh Theekshana',
-  MI: 'Hardik Pandya (c), Rohit Sharma, Jasprit Bumrah, Suryakumar Yadav, Ishan Kishan (wk), Tim David, Trent Boult, Dewald Brevis, Kumar Kartikeya',
-  RCB: 'Virat Kohli, Rajat Patidar, Faf du Plessis (c), Glenn Maxwell, Dinesh Karthik (wk), Wanindu Hasaranga, Josh Hazlewood, Mohammed Siraj, Cameron Green',
-  KKR: 'Shreyas Iyer (c), Andre Russell, Sunil Narine, Phil Salt (wk), Starc Mitchell, Varun Chakravarthy, Venkatesh Iyer, Rinku Singh, Nitish Rana',
-  SRH: 'Pat Cummins (c), Travis Head, Heinrich Klaasen (wk), Abhishek Sharma, Bhuvneshwar Kumar, Marco Jansen, Shahbaz Ahmed, Jaydev Unadkat',
-  DC: 'Rishabh Pant (c/wk), David Warner, Jake Fraser-McGurk, Axar Patel, Kuldeep Yadav, Anrich Nortje, Abishek Porel, Tristan Stubbs',
-  RR: 'Sanju Samson (c/wk), Yashasvi Jaiswal, Jos Buttler, Shimron Hetmyer, Ravichandran Ashwin, Trent Boult, Yuzvendra Chahal, Sandeep Sharma',
-  PBKS: 'Shikhar Dhawan (c), Jonny Bairstow (wk), Liam Livingstone, Sam Curran, Kagiso Rabada, Arshdeep Singh, Rahul Chahar, Jitesh Sharma',
-  GT: 'Shubman Gill (c), Rashid Khan, David Miller, Wriddhiman Saha (wk), Mohammed Shami, Noor Ahmad, B. Sai Sudharsan, Shahrukh Khan',
-  LSG: 'KL Rahul (c), Quinton de Kock (wk), Nicholas Pooran, Marcus Stoinis, Ravi Bishnoi, Mark Wood, Avesh Khan, Ayush Badoni',
+  CSK: 'Ruturaj Gaikwad (c), MS Dhoni (wk), Ravindra Jadeja, Shivam Dube, Matheesha Pathirana, Rachin Ravindra, Anshul Kamboj, Prashant Veer, Kartik Sharma, Deepak Chahar',
+  MI: 'Hardik Pandya (c), Rohit Sharma, Jasprit Bumrah, Suryakumar Yadav, Ishan Kishan (wk), Quinton de Kock, Tim David, Gerald Coetzee, Piyush Chawla',
+  RCB: 'Virat Kohli, Faf du Plessis (c), Rajat Patidar, Glenn Maxwell, Mohammed Siraj, Bhuvneshwar Kumar, Will Jacks, Cameron Green',
+  KKR: 'Shreyas Iyer (c), Andre Russell, Sunil Narine, Phil Salt (wk), Mitchell Starc, Rinku Singh, Varun Chakravarthy, Venkatesh Iyer, Cameron Green',
+  SRH: 'Pat Cummins (c), Travis Head, Heinrich Klaasen (wk), Abhishek Sharma, Eshan Malinga, Shahbaz Ahmed, Nitish Reddy, T Natarajan',
+  DC: 'Rishabh Pant (c/wk), KL Rahul, Jake Fraser-McGurk, Axar Patel, Kuldeep Yadav, Tristan Stubbs, Mukesh Kumar, Khaleel Ahmed',
+  RR: 'Sanju Samson (c/wk), Yashasvi Jaiswal, Jos Buttler, Riyan Parag, Vaibhav Sooryavanshi, Trent Boult, Yuzvendra Chahal, Sandeep Sharma, Avesh Khan',
+  PBKS: 'Sam Curran (c), Shashank Singh, Ashutosh Sharma, Arshdeep Singh, Kagiso Rabada, Liam Livingstone, Jonny Bairstow, Harshal Patel',
+  GT: 'Shubman Gill (c), Rashid Khan, B Sai Sudharsan, David Miller, Mohammed Shami, Kagiso Rabada, Rahul Tewatia, Spencer Johnson',
+  LSG: 'Nicholas Pooran (c), Mayank Yadav, Ravi Bishnoi, Prince Yadav, Marcus Stoinis, Ayush Badoni, Mohsin Khan'
 };
+
+// ── IPL 2026 Top Performers (Context) ──
+const IPL_2026_STATS = `
+Orange Cap Contenders (Top Scorers): Heinrich Klaasen (SRH - 494 runs), Abhishek Sharma (SRH - 475 runs), KL Rahul (DC - 468 runs), Shubman Gill (GT - 462 runs), Vaibhav Sooryavanshi (RR - 440 runs).
+Purple Cap Contenders (Top Wicket Takers): Kagiso Rabada (GT - 18 wkts), Bhuvneshwar Kumar (RCB - 17 wkts), Anshul Kamboj (CSK - 17 wkts), Prince Yadav (LSG - 16 wkts), Eshan Malinga (SRH - 16 wkts).
+`;
 
 // ── Venue Intelligence ──
 const VENUE_INTEL = {
@@ -61,7 +68,8 @@ export async function getAIPrediction(match) {
   const getForm = async (teamName) => {
     try {
       const pastMatches = await Match.find({ 
-        status: 'completed', 
+        status: 'completed',
+        category: match.category, // Differentiate formats
         $or: [{ team1: teamName }, { team2: teamName }] 
       }).sort({ date: -1 }).limit(5);
 
@@ -85,6 +93,7 @@ export async function getAIPrediction(match) {
   try {
     const h2hMatches = await Match.find({
       status: 'completed',
+      category: match.category, // Differentiate formats
       $or: [
         { team1: match.team1, team2: match.team2 },
         { team1: match.team2, team2: match.team1 }
@@ -108,7 +117,25 @@ export async function getAIPrediction(match) {
   const squad2 = getSquadInfo(match.team2);
   const format = match.category === 'ipl' ? 'T20 (IPL)' : match.category === 'icc-t20' ? 'T20I' : match.category === 'icc-odi' ? 'ODI' : 'Test';
 
-  const systemPrompt = `You are Harsha Bhogle-level cricket analyst combined with a data scientist. You give SHARP, SPECIFIC tactical predictions — never generic fluff.
+  // Get dynamic IPL standings if applicable
+  let standingsStr = '';
+  if (match.category === 'ipl') {
+    try {
+      const { standings } = await getIplStandings();
+      if (standings && standings.length > 0) {
+        const t1Stand = standings.find(s => s.team === match.team1 || match.team1Full.toLowerCase().includes(s.team.toLowerCase()));
+        const t2Stand = standings.find(s => s.team === match.team2 || match.team2Full.toLowerCase().includes(s.team.toLowerCase()));
+        
+        if (t1Stand && t2Stand) {
+          standingsStr = `CURRENT STANDINGS:\n${match.team1}: Rank ${t1Stand.rank} (${t1Stand.pts} pts, NRR ${t1Stand.nrr})\n${match.team2}: Rank ${t2Stand.rank} (${t2Stand.pts} pts, NRR ${t2Stand.nrr})\n`;
+        }
+      }
+    } catch (e) {
+      // Ignore error
+    }
+  }
+
+  const systemPrompt = `You are a Harsha Bhogle-level cricket analyst combined with a data scientist. You give SHARP, SPECIFIC tactical predictions — never generic fluff.
 
 BANNED PHRASES (never use these):
 - "home advantage", "home conditions", "home support"
@@ -117,10 +144,11 @@ BANNED PHRASES (never use these):
 - "key players will be crucial" (name them and say what they'll DO)
 - "conditions will favor" (say HOW and against WHICH batsmen/bowlers specifically)
 
-Your analysis must reference:
-1. SPECIFIC players by name and their SPECIFIC matchup advantage
-2. SPECIFIC venue characteristics (boundary size, avg score, dew, bounce) and how they affect specific bowlers/batsmen
-3. A concrete tactical edge (e.g., "X's left-arm angle into the right-handers gives them 3 dot balls per over in the powerplay on average")
+Your analysis must incorporate:
+1. SPECIFIC player form (e.g. current Orange/Purple cap contenders, if available).
+2. Tournament context (points table rank, desperation to win).
+3. SPECIFIC venue characteristics (boundary size, dew, bounce) and how they affect specific matchups.
+4. A concrete tactical edge (e.g., "X's left-arm angle into the right-handers gives them 3 dot balls per over in the powerplay on average").
 
 You respond ONLY in JSON format. No markdown, no explanation outside JSON.`;
 
@@ -134,17 +162,20 @@ ${match.team1Full} vs ${match.team2Full}
 ── VENUE INTELLIGENCE ──
 ${venueIntel}
 
+${match.category === 'ipl' ? `── IPL 2026 STATS CONTEXT ──\n${IPL_2026_STATS}\n` : ''}
+${standingsStr}
+
 ── SQUAD CONTEXT ──
 ${match.team1}: ${squad1}
 ${match.team2}: ${squad2}
 
-── FORM & H2H ──
+── FORM & H2H (Specific to this format) ──
 ${match.team1} recent form: ${form1}
 ${match.team2} recent form: ${form2}
 Head-to-Head: ${h2hStr}
 
 Give your prediction as JSON:
-{"winner": "Full Team Name", "confidence": <51-82>, "reason": "<Your razor-sharp 30-50 word analysis naming specific players, their matchup edge, and how the venue conditions create that edge>"}
+{"winner": "Full Team Name", "confidence": <51-82>, "reason": "<Your razor-sharp 40-60 word analysis naming specific players, their matchup edge, form stats, and how the venue conditions create that edge>"}
 
 "winner" must be exactly "${match.team1Full}" or "${match.team2Full}".`;
 

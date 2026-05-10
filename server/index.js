@@ -178,12 +178,14 @@ app.post('/api/vote', async (req, res) => {
       return res.status(403).json({ error: `Voting window closed (${windowDesc})` });
     }
 
-    // Insert or update vote
-    await Vote.findOneAndUpdate(
-      { matchId, userId },
-      { team },
-      { upsert: true }
-    );
+    // Check if vote already exists
+    const existingVote = await Vote.findOne({ matchId, userId });
+    if (existingVote) {
+      return res.status(403).json({ error: "You have already voted for this match. Votes cannot be changed." });
+    }
+
+    // Insert vote
+    await Vote.create({ matchId, userId, team, pointsAwarded: false });
     
     res.json({ success: true, team });
   } catch (err) {
@@ -200,12 +202,13 @@ app.post('/api/admin/simulate', async (req, res) => {
     await Match.findOneAndUpdate({ id: matchId }, { status: 'completed', winner });
     
     // Award points
-    const votes = await Vote.find({ matchId });
+    const votes = await Vote.find({ matchId, pointsAwarded: { $ne: true } });
     for (const vote of votes) {
-      if (vote.team === winner) {
+      if (vote.team.toLowerCase() === winner.toLowerCase() || winner.toLowerCase().includes(vote.team.toLowerCase())) {
         await User.findOneAndUpdate({ id: vote.userId }, { $inc: { points: 1 } });
-        await Vote.findOneAndDelete({ matchId, userId: vote.userId });
       }
+      // Mark vote as processed so points aren't awarded again, but keep it so it shows in the UI
+      await Vote.findOneAndUpdate({ _id: vote._id }, { pointsAwarded: true });
     }
     
     res.json({ success: true });

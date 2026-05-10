@@ -28,7 +28,8 @@ const matchSchema = new mongoose.Schema({
 const voteSchema = new mongoose.Schema({
   matchId: { type: String, required: true },
   userId: { type: String, required: true },
-  team: { type: String, required: true }
+  team: { type: String, required: true },
+  pointsAwarded: { type: Boolean, default: false }
 });
 
 // Compound index to ensure one vote per user per match

@@ -514,13 +514,13 @@ export const updateMatchesJob = async () => {
       );
 
       if (match.status === 'completed' && match.winner) {
-        const votes = await Vote.find({ matchId: match.id });
+        const votes = await Vote.find({ matchId: match.id, pointsAwarded: { $ne: true } });
         for (const vote of votes) {
           if (vote.team.toLowerCase() === match.winner.toLowerCase() ||
               match.winner.toLowerCase().includes(vote.team.toLowerCase())) {
             await User.findOneAndUpdate({ id: vote.userId }, { $inc: { points: 1 } });
-            await Vote.findOneAndDelete({ matchId: match.id, userId: vote.userId });
           }
+          await Vote.findOneAndUpdate({ _id: vote._id }, { pointsAwarded: true });
         }
       }
     }

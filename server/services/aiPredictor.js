@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { Match } from '../db.js';
 
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
@@ -12,7 +13,50 @@ export async function getAIPrediction(match) {
     return { error: 'AI predictions unavailable (no API key configured)' };
   }
 
-  const prompt = `You are a cricket analytics expert. Predict the winner of this match:
+  const getForm = async (teamName) => {
+    try {
+      const pastMatches = await Match.find({ 
+        status: 'completed', 
+        $or: [{ team1: teamName }, { team2: teamName }] 
+      }).sort({ date: -1 }).limit(5);
+
+      if (pastMatches.length === 0) return 'No recent data';
+      return pastMatches.map(m => {
+        if (m.winner === teamName) return 'W';
+        if (m.winner && m.winner !== teamName && m.winner !== 'TBD' && m.winner !== 'Draw') return 'L';
+        return 'D';
+      }).reverse().join('-');
+    } catch (e) {
+      return 'Unknown';
+    }
+  };
+
+  const form1 = await getForm(match.team1);
+  const form2 = await getForm(match.team2);
+
+  // Calculate Head-to-Head
+  let h2hStr = 'No recent encounters in database';
+  try {
+    const h2hMatches = await Match.find({
+      status: 'completed',
+      $or: [
+        { team1: match.team1, team2: match.team2 },
+        { team1: match.team2, team2: match.team1 }
+      ]
+    });
+    if (h2hMatches.length > 0) {
+      let t1Wins = 0; let t2Wins = 0;
+      h2hMatches.forEach(m => {
+        if (m.winner === match.team1) t1Wins++;
+        else if (m.winner === match.team2) t2Wins++;
+      });
+      h2hStr = `${match.team1} ${t1Wins} - ${t2Wins} ${match.team2} (out of ${h2hMatches.length} matches)`;
+    }
+  } catch (e) {
+    // Ignore error
+  }
+
+  const prompt = `You are a world-class cricket analytics expert. Your task is to predict the winner of this upcoming cricket match:
 
 Match: ${match.team1Full} vs ${match.team2Full}
 Tournament: ${match.tournament}
@@ -20,14 +64,23 @@ Venue: ${match.venue}
 Date: ${match.date}
 Format: ${match.category === 'ipl' ? 'T20 (IPL)' : match.category === 'icc-t20' ? 'T20I' : match.category === 'icc-odi' ? 'ODI' : 'Test'}
 
+[LIVE STATS FROM DATABASE]
+${match.team1} Recent Form (Last 5): ${form1}
+${match.team2} Recent Form (Last 5): ${form2}
+Head-to-Head (Recent): ${h2hStr}
+
+Based on your extensive historical knowledge AND the [LIVE STATS] provided above, carefully analyze the following factors:
+1. The injected Head-to-Head and Recent Form statistics (prioritize these over historical biases).
+2. Pitch and weather conditions typically expected at ${match.venue}.
+3. General team strengths and weaknesses.
+
 Respond in this EXACT JSON format only, no markdown:
-{"winner": "Team Name", "confidence": 65, "reason": "Brief 1-2 sentence analysis"}
+{"winner": "Team Name", "confidence": 65, "reason": "Detailed 2-3 sentence analysis of pitch conditions, head-to-head, and key match-ups."}
 
 Rules:
 - "winner" must be exactly one of: "${match.team1Full}" or "${match.team2Full}"
-- "confidence" must be a number between 51 and 85 (no match is certain)
-- "reason" should mention form, conditions, or head-to-head
-- Keep reasoning under 30 words`;
+- "confidence" must be a realistic number between 51 and 85 (no match is certain).
+- "reason" must be highly analytical, explicitly mentioning the specific venue behavior (e.g., spin-friendly, high-scoring) and team matchups. Keep it under 40 words.`;
 
   try {
     const { data } = await axios.post(GROQ_API_URL, {

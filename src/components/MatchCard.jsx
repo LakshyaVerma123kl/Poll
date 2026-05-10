@@ -10,36 +10,22 @@ function calcVotingWindow(match) {
   const matchStartIST = new Date(`${match.date}T${startTime.padStart(5,'0')}:00+05:30`);
   const matchStartMs = matchStartIST.getTime();
 
+  // Open 30 mins prior to match
+  let voteOpenMs = matchStartMs - (30 * 60 * 1000);
+  // Close 1.25 hours (75 mins) after match start
+  let voteCloseMs = matchStartMs + (75 * 60 * 1000);
+
+  const openTime = new Date(voteOpenMs);
+  const openTimeStr = openTime.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
+  const openDateStr = openTime.toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata', month: 'short', day: 'numeric' });
+  const openLabel = `${openDateStr}, ${openTimeStr} IST`;
+
+  const closeLabel = `~1.25 hrs`;
+
+  // Provide arbitrary values to not break downstream components
+  const overLimit = 15;
   const matchType = match.matchType || 't20';
-  const isAbroad = match.isAbroad === true || match.isAbroad === 1 || match.isAbroad === '1';
-  const OVER_MS = 4 * 60 * 1000;
-  const TOSS_OFFSET_MS = 30 * 60 * 1000;
-
-  let voteOpenMs, voteCloseMs, openLabel, closeLabel, overLimit;
-
-  if (isAbroad) {
-    voteOpenMs = new Date(`${match.date}T07:00:00+05:30`).getTime();
-    voteCloseMs = matchStartMs + (6 * OVER_MS);
-    openLabel = '7:00 AM IST';
-    closeLabel = '~6 overs';
-    overLimit = 6;
-  } else {
-    voteOpenMs = matchStartMs - TOSS_OFFSET_MS;
-    let tossH = startH, tossMin = startM - 30;
-    if (tossMin < 0) { tossH--; tossMin += 60; }
-    openLabel = `${String(tossH).padStart(2,'0')}:${String(tossMin).padStart(2,'0')} IST`;
-
-    if (matchType === 't20') {
-      voteCloseMs = matchStartMs + (4 * OVER_MS);
-      closeLabel = '~4 overs'; overLimit = 4;
-    } else if (matchType === 'odi') {
-      voteCloseMs = matchStartMs + (8 * OVER_MS);
-      closeLabel = '~8 overs'; overLimit = 8;
-    } else {
-      voteCloseMs = matchStartMs + (18 * OVER_MS);
-      closeLabel = '~18 overs'; overLimit = 18;
-    }
-  }
+  const isAbroad = false;
 
   return { voteOpenMs, voteCloseMs, openLabel, closeLabel, matchType, isAbroad, overLimit, matchStartMs };
 }
@@ -62,8 +48,9 @@ export default function MatchCard({ match }) {
   const [aiLoading, setAiLoading] = useState(false);
   const timerRef = useRef(null);
   
-  const userVote = votes[match.id]?.[currentUser?.id];
-  const isCompleted = match.status === 'completed';
+  const userVoteData = votes[match.id]?.[currentUser?.id];
+  const userVote = userVoteData?.team;
+  const isCompleted = match.status === 'completed' || (new Date(`${match.date}T${match.startTime || '19:30'}:00+05:30`).getTime() + 5 * 60 * 60 * 1000 < Date.now());
   const isLive = match.status === 'live';
   const hasWinner = isCompleted && match.winner;
   
@@ -168,8 +155,15 @@ export default function MatchCard({ match }) {
   };
 
   const handleVote = (team) => {
+    if (userVote) {
+      alert("You have already cast your vote for this match. Votes cannot be changed!");
+      return;
+    }
     if (canVote) {
-      castVote(match.id, team);
+      const isSure = window.confirm(`Are you sure you want to vote for ${team}? You CANNOT change your vote later.`);
+      if (isSure) {
+        castVote(match.id, team);
+      }
     } else {
       const msg = windowState === 'waiting'
         ? `Voting hasn't opened yet. ${countdown ? `Opens in ${countdown}` : ''}`
@@ -198,6 +192,28 @@ export default function MatchCard({ match }) {
     if (isLive) return <span className="status-badge live"><span className="live-dot"></span>LIVE</span>;
     if (isCompleted) return <span className="status-badge completed">✓ Completed</span>;
     return <span className="status-badge upcoming">Upcoming</span>;
+  };
+
+  const matchVotes = votes[match.id] || {};
+  const team1Voters = Object.values(matchVotes).filter(v => v.team === match.team1);
+  const team2Voters = Object.values(matchVotes).filter(v => v.team === match.team2);
+
+  const renderVoters = (voters) => {
+    if (voters.length === 0) return null;
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', marginTop: '8px', flexWrap: 'wrap', gap: '4px' }}>
+        {voters.map((v, i) => (
+          <div key={`${v.name}-${i}`} title={v.name} style={{
+            width: '22px', height: '22px', borderRadius: '50%',
+            background: 'var(--gradient-primary)', color: '#fff',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: '0.65rem', fontWeight: 'bold', border: '1.5px solid var(--background)'
+          }}>
+            {v.avatar}
+          </div>
+        ))}
+      </div>
+    );
   };
 
   // Voting window section
@@ -365,7 +381,7 @@ export default function MatchCard({ match }) {
               fontSize: '1.1rem', fontWeight: 'bold', marginBottom: '0.5rem',
               border: `3px solid ${userVote === match.team1 ? 'white' : 'rgba(255,255,255,0.1)'}`,
               boxShadow: userVote === match.team1 ? `0 0 25px ${getTeamColor(match.team1)}88` : `0 4px 12px rgba(0,0,0,0.3)`,
-              cursor: canVote ? 'pointer' : 'default',
+              cursor: canVote && !userVote ? 'pointer' : 'default',
               position: 'relative', lineHeight: '1.2'
             }}
             onClick={() => handleVote(match.team1)}
@@ -387,19 +403,20 @@ export default function MatchCard({ match }) {
           
           {!isCompleted && (
             <motion.button 
-              whileHover={canVote ? { scale: 1.05 } : {}}
-              whileTap={canVote ? { scale: 0.95 } : {}}
+              whileHover={canVote && !userVote ? { scale: 1.05 } : {}}
+              whileTap={canVote && !userVote ? { scale: 0.95 } : {}}
               className={`btn ${userVote === match.team1 ? 'btn-primary' : 'btn-outline'}`}
               style={{ 
                 marginTop: '0.75rem', width: '100%', padding: '0.5rem', fontSize: '0.85rem',
-                opacity: !canVote && userVote !== match.team1 ? 0.4 : 1,
+                opacity: (!canVote || userVote) && userVote !== match.team1 ? 0.4 : 1,
               }}
               onClick={() => handleVote(match.team1)}
-              disabled={!canVote && userVote !== match.team1}
+              disabled={!canVote || !!userVote}
             >
               {userVote === match.team1 ? '✓ Voted' : canVote ? '🗳️ Vote' : 'Vote'}
             </motion.button>
           )}
+          {renderVoters(team1Voters)}
         </div>
 
         {/* VS Divider */}
@@ -429,7 +446,7 @@ export default function MatchCard({ match }) {
               fontSize: '1.1rem', fontWeight: 'bold', marginBottom: '0.5rem',
               border: `3px solid ${userVote === match.team2 ? 'white' : 'rgba(255,255,255,0.1)'}`,
               boxShadow: userVote === match.team2 ? `0 0 25px ${getTeamColor(match.team2)}88` : `0 4px 12px rgba(0,0,0,0.3)`,
-              cursor: canVote ? 'pointer' : 'default',
+              cursor: canVote && !userVote ? 'pointer' : 'default',
               position: 'relative', lineHeight: '1.2'
             }}
             onClick={() => handleVote(match.team2)}
@@ -451,19 +468,20 @@ export default function MatchCard({ match }) {
           
           {!isCompleted && (
             <motion.button 
-              whileHover={canVote ? { scale: 1.05 } : {}}
-              whileTap={canVote ? { scale: 0.95 } : {}}
+              whileHover={canVote && !userVote ? { scale: 1.05 } : {}}
+              whileTap={canVote && !userVote ? { scale: 0.95 } : {}}
               className={`btn ${userVote === match.team2 ? 'btn-primary' : 'btn-outline'}`}
               style={{ 
                 marginTop: '0.75rem', width: '100%', padding: '0.5rem', fontSize: '0.85rem',
-                opacity: !canVote && userVote !== match.team2 ? 0.4 : 1,
+                opacity: (!canVote || userVote) && userVote !== match.team2 ? 0.4 : 1,
               }}
               onClick={() => handleVote(match.team2)}
-              disabled={!canVote && userVote !== match.team2}
+              disabled={!canVote || !!userVote}
             >
               {userVote === match.team2 ? '✓ Voted' : canVote ? '🗳️ Vote' : 'Vote'}
             </motion.button>
           )}
+          {renderVoters(team2Voters)}
         </div>
       </div>
 

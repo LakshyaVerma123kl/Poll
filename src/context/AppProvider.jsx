@@ -46,11 +46,8 @@ export const AppProvider = ({ children }) => {
       const matchesRes = await axios.get(url);
       setMatches(matchesRes.data.matches);
       if (matchesRes.data.votes) {
-        const formattedVotes = {};
-        for (const [mId, team] of Object.entries(matchesRes.data.votes)) {
-          formattedVotes[mId] = { [currentUser.id]: team };
-        }
-        setVotes(formattedVotes);
+        // Now it's groupedVotes[matchId][userId] = { team, name, avatar }
+        setVotes(matchesRes.data.votes);
       }
     } catch (err) {
       console.error("Failed to fetch data", err);
@@ -99,8 +96,8 @@ export const AppProvider = ({ children }) => {
       setVotes(prev => ({
         ...prev,
         [matchId]: {
-          ...prev[matchId],
-          [currentUser.id]: team
+          ...(prev[matchId] || {}),
+          [currentUser.id]: { team, name: currentUser.name, avatar: currentUser.avatar }
         }
       }));
     } catch (err) {

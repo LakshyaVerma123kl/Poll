@@ -1,6 +1,6 @@
 import express from 'express';
 import cors from 'cors';
-import { initDb, getDb } from './db.js';
+import { connectDb, User, Match, Vote } from './db.js';
 import { updateMatchesJob } from './services/matchFetcher.js';
 import { getAIPrediction } from './services/aiPredictor.js';
 import dotenv from 'dotenv';
@@ -45,19 +45,18 @@ app.post('/api/login', async (req, res) => {
     const { name } = req.body;
     if (!name) return res.status(400).json({ error: "Name is required" });
     
-    const db = getDb();
     const clientIp = getClientIp(req);
     
     // Check if this IP already has a registered user
-    const existingByIp = db.prepare('SELECT * FROM users WHERE ip = ?').get(clientIp);
+    const existingByIp = await User.findOne({ ip: clientIp });
     
     // If user exists by name, allow re-login from any IP but update their IP
-    let user = db.prepare('SELECT * FROM users WHERE name COLLATE NOCASE = ?').get(name);
+    let user = await User.findOne({ name: { $regex: new RegExp(`^${name}$`, 'i') } });
     
     if (user) {
       // User exists — allow re-login, update IP
-      db.prepare('UPDATE users SET ip = ? WHERE id = ?').run(clientIp, user.id);
-      user = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+      user.ip = clientIp;
+      await user.save();
       res.json(user);
       return;
     }
@@ -73,8 +72,8 @@ app.post('/api/login', async (req, res) => {
     // Create new user
     const id = 'u' + Date.now();
     const avatar = name.charAt(0).toUpperCase();
-    db.prepare('INSERT INTO users (id, name, points, avatar, ip) VALUES (?, ?, 0, ?, ?)').run(id, name, avatar, clientIp);
-    user = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+    user = new User({ id, name, points: 0, avatar, ip: clientIp });
+    await user.save();
     
     res.json(user);
   } catch (err) {
@@ -85,9 +84,8 @@ app.post('/api/login', async (req, res) => {
 
 app.get('/api/users', async (req, res) => {
   try {
-    const db = getDb();
     // Don't expose IP addresses to clients
-    const users = db.prepare('SELECT id, name, points, avatar FROM users ORDER BY points DESC').all();
+    const users = await User.find().sort({ points: -1 }).select('id name points avatar -_id');
     res.json(users);
   } catch (err) {
     res.status(500).json({ error: "Server Error" });
@@ -96,21 +94,47 @@ app.get('/api/users', async (req, res) => {
 
 app.get('/api/matches', async (req, res) => {
   try {
-    const db = getDb();
-    const matches = db.prepare('SELECT * FROM matches').all();
+    const matches = await Match.find().select('-_id -__v');
     
-    // Fetch user votes if user id is passed
-    const userId = req.query.userId;
-    let userVotes = [];
-    if (userId) {
-      userVotes = db.prepare('SELECT matchId, team FROM votes WHERE userId = ?').all(userId);
+    // Fetch all votes with user details using Aggregation
+    const allVotes = await Vote.aggregate([
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'userId',
+          foreignField: 'id',
+          as: 'userInfo'
+        }
+      },
+      {
+        $unwind: '$userInfo'
+      },
+      {
+        $project: {
+          matchId: 1,
+          team: 1,
+          userId: 1,
+          name: '$userInfo.name',
+          avatar: '$userInfo.avatar'
+        }
+      }
+    ]);
+    
+    // Group votes by matchId
+    const groupedVotes = {};
+    for (const v of allVotes) {
+      if (!groupedVotes[v.matchId]) groupedVotes[v.matchId] = {};
+      if (!groupedVotes[v.matchId][v.userId]) {
+        groupedVotes[v.matchId][v.userId] = { team: v.team, name: v.name, avatar: v.avatar };
+      }
     }
 
     res.json({
       matches,
-      votes: userVotes.reduce((acc, v) => ({ ...acc, [v.matchId]: v.team }), {})
+      votes: groupedVotes
     });
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: "Server Error" });
   }
 });
@@ -119,15 +143,13 @@ app.post('/api/vote', async (req, res) => {
   try {
     const { userId, matchId, team } = req.body;
     
-    const db = getDb();
-    const match = db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId);
+    const match = await Match.findOne({ id: matchId });
     if (!match) return res.status(404).json({ error: "Match not found" });
     if (match.status === 'completed') {
       return res.status(400).json({ error: "Cannot vote on a completed match" });
     }
     if (match.status === 'live') {
       // For live matches, check if we're still within the over cutoff window
-      // We'll allow voting during live if still within the over-based window
     }
 
     // ── Voting Window Calculation (all times stored as IST) ──
@@ -138,46 +160,30 @@ app.post('/api/vote', async (req, res) => {
     const matchStartIST = new Date(`${match.date}T${startTime.padStart(5,'0')}:00+05:30`);
     const matchStartMs = matchStartIST.getTime();
 
-    const matchType = match.matchType || 't20';
-    const isAbroad = Number(match.isAbroad) === 1;
-
-    const OVER_MS = 4 * 60 * 1000;
-    const TOSS_OFFSET_MS = 30 * 60 * 1000;
-
-    let voteOpenMs, voteCloseMs, windowDesc;
-
-    if (isAbroad) {
-      const abroadOpenIST = new Date(`${match.date}T07:00:00+05:30`);
-      voteOpenMs = abroadOpenIST.getTime();
-      voteCloseMs = matchStartMs + (6 * OVER_MS);
-      windowDesc = `7:00 AM IST to ~6 overs after start`;
-    } else {
-      voteOpenMs = matchStartMs - TOSS_OFFSET_MS;
-      if (matchType === 't20') {
-        voteCloseMs = matchStartMs + (4 * OVER_MS);
-        windowDesc = `Toss to ~4 overs`;
-      } else if (matchType === 'odi') {
-        voteCloseMs = matchStartMs + (8 * OVER_MS);
-        windowDesc = `Toss to ~8 overs`;
-      } else {
-        voteCloseMs = matchStartMs + (18 * OVER_MS);
-        windowDesc = `Toss to ~18 overs`;
-      }
-    }
+    // Open 30 mins prior to match
+    let voteOpenMs = matchStartMs - (30 * 60 * 1000);
+    // Close 1.25 hours (75 mins) after match start
+    let voteCloseMs = matchStartMs + (75 * 60 * 1000);
+    let windowDesc = `30m before match to 1.25 hrs after start`;
 
     // Compare in UTC ms
     const nowMs = Date.now();
     if (nowMs < voteOpenMs) {
-      let tossH = startH, tossMin = startM - 30;
-      if (tossMin < 0) { tossH--; tossMin += 60; }
-      const timeStr = isAbroad ? '07:00' : `${String(tossH).padStart(2,'0')}:${String(tossMin).padStart(2,'0')}`;
-      return res.status(403).json({ error: `Voting opens at ${timeStr} IST (${windowDesc})` });
+      const openTime = new Date(voteOpenMs);
+      const openTimeStr = openTime.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
+      const openDateStr = openTime.toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata', month: 'short', day: 'numeric' });
+      return res.status(403).json({ error: `Voting opens at ${openTimeStr} on ${openDateStr} IST (${windowDesc})` });
     }
     if (nowMs > voteCloseMs) {
       return res.status(403).json({ error: `Voting window closed (${windowDesc})` });
     }
 
-    db.prepare('INSERT INTO votes (matchId, userId, team) VALUES (?, ?, ?) ON CONFLICT(matchId, userId) DO UPDATE SET team=excluded.team').run(matchId, userId, team);
+    // Insert or update vote
+    await Vote.findOneAndUpdate(
+      { matchId, userId },
+      { team },
+      { upsert: true }
+    );
     
     res.json({ success: true, team });
   } catch (err) {
@@ -190,15 +196,15 @@ app.post('/api/vote', async (req, res) => {
 app.post('/api/admin/simulate', async (req, res) => {
   try {
     const { matchId, winner } = req.body;
-    const db = getDb();
-    db.prepare('UPDATE matches SET status = "completed", winner = ? WHERE id = ?').run(winner, matchId);
+    
+    await Match.findOneAndUpdate({ id: matchId }, { status: 'completed', winner });
     
     // Award points
-    const votes = db.prepare('SELECT * FROM votes WHERE matchId = ?').all(matchId);
+    const votes = await Vote.find({ matchId });
     for (const vote of votes) {
       if (vote.team === winner) {
-        db.prepare('UPDATE users SET points = points + 1 WHERE id = ?').run(vote.userId);
-        db.prepare('DELETE FROM votes WHERE matchId = ? AND userId = ?').run(matchId, vote.userId);
+        await User.findOneAndUpdate({ id: vote.userId }, { $inc: { points: 1 } });
+        await Vote.findOneAndDelete({ matchId, userId: vote.userId });
       }
     }
     
@@ -206,6 +212,11 @@ app.post('/api/admin/simulate', async (req, res) => {
   } catch(err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// Keep-alive Ping endpoint
+app.get('/api/ping', (req, res) => {
+  res.json({ status: 'alive', time: new Date().toISOString() });
 });
 
 // AI Prediction endpoint
@@ -220,8 +231,7 @@ app.get('/api/predict/:matchId', async (req, res) => {
       return res.json(cached.data);
     }
 
-    const db = getDb();
-    const match = db.prepare('SELECT * FROM matches WHERE id = ?').get(matchId);
+    const match = await Match.findOne({ id: matchId });
     if (!match) return res.status(404).json({ error: 'Match not found' });
     if (match.status === 'completed') {
       return res.json({ winner: match.winner, confidence: 100, reason: 'Match already completed', model: 'result' });
@@ -239,7 +249,6 @@ app.get('/api/predict/:matchId', async (req, res) => {
 });
 
 // Catch-all route to serve React app for non-API requests in production
-// Express 5 requires named splat params instead of bare '*'
 if (process.env.NODE_ENV === 'production') {
   app.get('/{*splat}', (req, res) => {
     res.sendFile(path.join(__dirname, '../dist/index.html'));
@@ -248,10 +257,20 @@ if (process.env.NODE_ENV === 'production') {
 
 app.listen(PORT, async () => {
   console.log(`Server running on port ${PORT}`);
-  // Initialize DB (loads WASM) and fetch matches on startup
-  await initDb();
+  
+  // Connect to MongoDB
+  await connectDb();
+  
+  // Fetch matches on startup
   await updateMatchesJob();
   
   // Set up polling interval every 5 minutes to fetch matches
   setInterval(updateMatchesJob, 5 * 60 * 1000);
+
+  // Self-ping every 14 minutes to help prevent Render sleep
+  setInterval(() => {
+    import('http').then(http => {
+      http.get(`http://localhost:${PORT}/api/ping`).on('error', () => {});
+    });
+  }, 14 * 60 * 1000);
 });

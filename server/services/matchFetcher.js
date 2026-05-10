@@ -1,6 +1,6 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
-import { getDb } from '../db.js';
+import { Match, User, Vote } from '../db.js';
 
 // ============================================================
 // MULTI-LAYER MATCH FETCHER ENGINE (Future-Proof)
@@ -486,34 +486,40 @@ export const fetchAllMatches = async () => {
 // ======================== UPDATE JOB ========================
 export const updateMatchesJob = async () => {
   try {
-    const db = getDb();
     const fetchedMatches = await fetchAllMatches();
 
-    const upsertMatch = db.prepare(`
-      INSERT INTO matches (id, team1, team1Full, team2, team2Full, date, startTime, status, winner, tournament, venue, category, matchType, isAbroad)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET 
-        status=excluded.status, 
-        winner=excluded.winner,
-        venue=CASE WHEN excluded.venue != 'TBA' THEN excluded.venue ELSE matches.venue END,
-        matchType=excluded.matchType,
-        isAbroad=excluded.isAbroad
-    `);
-
-    const getVotes = db.prepare('SELECT * FROM votes WHERE matchId = ?');
-    const addPoint = db.prepare('UPDATE users SET points = points + 1 WHERE id = ?');
-    const deleteVote = db.prepare('DELETE FROM votes WHERE matchId = ? AND userId = ?');
-
     for (const match of fetchedMatches) {
-      upsertMatch.run(match.id, match.team1, match.team1Full, match.team2, match.team2Full, match.date, match.startTime, match.status, match.winner, match.tournament, match.venue || 'TBA', match.category || 'ipl', match.matchType || 't20', match.isAbroad ? 1 : 0);
+      // Find existing match to preserve its venue if new one is TBA
+      const existing = await Match.findOne({ id: match.id });
+      const finalVenue = match.venue === 'TBA' && existing ? existing.venue : (match.venue || 'TBA');
+
+      await Match.findOneAndUpdate(
+        { id: match.id },
+        {
+          team1: match.team1,
+          team1Full: match.team1Full,
+          team2: match.team2,
+          team2Full: match.team2Full,
+          date: match.date,
+          startTime: match.startTime,
+          status: match.status,
+          winner: match.winner,
+          tournament: match.tournament,
+          venue: finalVenue,
+          category: match.category || 'ipl',
+          matchType: match.matchType || 't20',
+          isAbroad: match.isAbroad ? true : false
+        },
+        { upsert: true }
+      );
 
       if (match.status === 'completed' && match.winner) {
-        const votes = getVotes.all(match.id);
+        const votes = await Vote.find({ matchId: match.id });
         for (const vote of votes) {
           if (vote.team.toLowerCase() === match.winner.toLowerCase() ||
               match.winner.toLowerCase().includes(vote.team.toLowerCase())) {
-            addPoint.run(vote.userId);
-            deleteVote.run(match.id, vote.userId);
+            await User.findOneAndUpdate({ id: vote.userId }, { $inc: { points: 1 } });
+            await Vote.findOneAndDelete({ matchId: match.id, userId: vote.userId });
           }
         }
       }

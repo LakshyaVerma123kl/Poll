@@ -51,9 +51,10 @@ export default function Leaderboard() {
                 <div style={{
                   width: '30px',
                   fontWeight: 'bold',
+                  fontSize: isTop3 ? '1.5rem' : '1rem',
                   color: isTop3 ? rankColors[index] : 'var(--text-muted)'
                 }}>
-                  #{index + 1}
+                  {index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `#${index + 1}`}
                 </div>
                 
                 <div className="user-avatar" style={{ 
@@ -79,7 +80,13 @@ export default function Leaderboard() {
                     fontSize: '1.25rem',
                   }}
                 >
-                  {user.points} <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 'normal' }}>pts</span>
+                  <span style={{ 
+                    background: isTop3 ? `linear-gradient(135deg, ${rankColors[index]}, #fff)` : 'none',
+                    WebkitBackgroundClip: isTop3 ? 'text' : 'border-box',
+                    WebkitTextFillColor: isTop3 ? 'transparent' : 'inherit'
+                  }}>
+                    {user.points}
+                  </span> <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 'normal', WebkitTextFillColor: 'initial' }}>🏆 Wins</span>
                 </motion.div>
               </motion.div>
             );

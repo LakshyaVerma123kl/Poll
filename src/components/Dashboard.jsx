@@ -16,16 +16,22 @@ export default function Dashboard() {
       if (a.status === 'live' && b.status !== 'live') return -1;
       if (b.status === 'live' && a.status !== 'live') return 1;
 
+      // Helper: treat matches older than 5 hours as completed
+      const isCompleted = (m) => m.status === 'completed' || (new Date(`${m.date}T${m.startTime || '19:30'}:00+05:30`).getTime() + 5 * 60 * 60 * 1000 < Date.now());
+      
+      const aComp = isCompleted(a);
+      const bComp = isCompleted(b);
+
       // 2. Completed matches at the bottom
-      if (a.status === 'completed' && b.status !== 'completed') return 1;
-      if (b.status === 'completed' && a.status !== 'completed') return -1;
+      if (aComp && !bComp) return 1;
+      if (bComp && !aComp) return -1;
 
       // 3. For upcoming matches, sort nearest first (ascending)
       // For completed matches, sort newest first (descending)
-      const dateA = new Date(a.date);
-      const dateB = new Date(b.date);
+      const dateA = new Date(`${a.date}T${a.startTime || '19:30'}:00+05:30`).getTime();
+      const dateB = new Date(`${b.date}T${b.startTime || '19:30'}:00+05:30`).getTime();
       
-      if (a.status === 'completed') {
+      if (aComp) {
         return dateB - dateA; // Descending for completed
       } else {
         return dateA - dateB; // Ascending for upcoming

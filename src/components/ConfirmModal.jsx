@@ -4,8 +4,6 @@ import { ShieldCheck, X } from 'lucide-react';
 import { sounds } from '../utils/audio';
 
 export default function ConfirmModal({ isOpen, onClose, onConfirm, team, title, message }) {
-  if (!isOpen) return null;
-
   const handleConfirm = () => {
     sounds.lock();
     onConfirm();

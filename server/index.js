@@ -306,16 +306,16 @@ app.listen(PORT, async () => {
   // Fetch matches on startup
   await updateMatchesJob();
   
-  // Set up polling interval every 5 minutes to fetch matches
-  setInterval(updateMatchesJob, 5 * 60 * 1000);
+  // Set up polling interval every 45 minutes to fetch matches
+  setInterval(updateMatchesJob, 45 * 60 * 1000);
 
-  // Live status updater runs every 2 minutes for fast match status detection
+  // Live status updater runs every 45 minutes
   await liveStatusUpdater();
 
-  // IPL Points Table — refresh on startup and every 10 minutes
+  // IPL Points Table — refresh on startup and every 45 minutes
   await refreshPointsTable();
-  setInterval(refreshPointsTable, 10 * 60 * 1000);
-  setInterval(liveStatusUpdater, 2 * 60 * 1000);
+  setInterval(refreshPointsTable, 45 * 60 * 1000);
+  setInterval(liveStatusUpdater, 45 * 60 * 1000);
 
   // Self-ping every 14 minutes to help prevent Render sleep
   setInterval(() => {

@@ -8,28 +8,48 @@ import { sounds } from '../utils/audio';
 // ── Voting window calculation (shared helper) ──
 function calcVotingWindow(match) {
   const startTime = match.startTime || '19:30';
+  const matchDate = match.date || new Date().toISOString().split('T')[0];
+  
   const [startH, startM] = startTime.split(':').map(Number);
-  const matchStartIST = new Date(`${match.date}T${startTime.padStart(5,'0')}:00+05:30`);
+  const matchStartIST = new Date(`${matchDate}T${startTime.padStart(5,'0')}:00+05:30`);
   const matchStartMs = matchStartIST.getTime();
 
-  // Open 30 mins prior to match
-  let voteOpenMs = matchStartMs - (30 * 60 * 1000);
-  // Close 1.25 hours (75 mins) after match start
-  let voteCloseMs = matchStartMs + (75 * 60 * 1000);
+  const isAbroad = match.isAbroad === true || match.isAbroad === 1 || match.isAbroad === 'true';
+  const matchType = (match.matchType || 't20').toLowerCase();
 
-  const openTime = new Date(voteOpenMs);
-  const openTimeStr = openTime.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
-  const openDateStr = openTime.toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata', month: 'short', day: 'numeric' });
-  const openLabel = `${openDateStr}, ${openTimeStr} IST`;
+  let voteOpenMs;
+  let voteCloseMs;
+  let openLabel;
+  let closeLabel;
 
-  const closeLabel = `~1.25 hrs`;
+  if (isAbroad) {
+    // Abroad matches: Open at 07:00 AM IST on the day of the match
+    const matchDay = new Date(`${matchDate}T07:00:00+05:30`);
+    voteOpenMs = matchDay.getTime();
+    openLabel = `${matchDay.toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata', month: 'short', day: 'numeric' })}, 07:00 AM IST`;
+  } else {
+    // India matches: Open 30 mins prior to match
+    voteOpenMs = matchStartMs - (30 * 60 * 1000);
+    const openTime = new Date(voteOpenMs);
+    openLabel = `${openTime.toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata', month: 'short', day: 'numeric' })}, ${openTime.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' })} IST`;
+  }
 
-  // Provide arbitrary values to not break downstream components
-  const overLimit = 15;
-  const matchType = match.matchType || 't20';
-  const isAbroad = false;
+  // Close logic based on format
+  if (matchType === 'test') {
+    // Close 5 hours after start
+    voteCloseMs = matchStartMs + (5 * 60 * 60 * 1000);
+    closeLabel = `~5 hrs (Test)`;
+  } else if (matchType === 'odi') {
+    // Close 3.5 hours after start
+    voteCloseMs = matchStartMs + (3.5 * 60 * 60 * 1000);
+    closeLabel = `~3.5 hrs (ODI)`;
+  } else {
+    // Default to T20: close 1.25 hours (75 mins) after start
+    voteCloseMs = matchStartMs + (75 * 60 * 1000);
+    closeLabel = `~1.25 hrs (T20)`;
+  }
 
-  return { voteOpenMs, voteCloseMs, openLabel, closeLabel, matchType, isAbroad, overLimit, matchStartMs };
+  return { voteOpenMs, voteCloseMs, openLabel, closeLabel, matchType, isAbroad, overLimit: 15, matchStartMs };
 }
 
 // ── Format badge colors ──
@@ -370,7 +390,7 @@ export default function MatchCard({ match }) {
       {/* Date & Venue */}
       <div style={{ textAlign: 'center', marginBottom: '0.5rem' }}>
         <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '0.2rem' }}>
-          {new Date(match.date + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} • {match.startTime || '19:30'} IST
+          {new Date(match.date + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} • {match.startTime || '19:30'} {isAbroad ? '(Est. IST)' : 'IST'}
         </div>
         {match.venue && match.venue !== 'TBA' && (
           <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', opacity: 0.7 }}>

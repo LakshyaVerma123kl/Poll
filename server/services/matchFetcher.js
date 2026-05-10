@@ -46,14 +46,28 @@ function categorizeMatch(name, matchType) {
   const n = (name || '').toLowerCase();
   const mt = (matchType || '').toLowerCase();
 
-  if (n.includes('ipl') || n.includes('indian premier league')) return 'ipl';
+  const iplTeams = ['csk', 'mi', 'rcb', 'kkr', 'srh', 'rr', 'dc', 'pbks', 'gt', 'lsg'];
+  const hasIplTeam = iplTeams.some(t => ` ${n} `.includes(` ${t} `));
+
+  if (n.includes('ipl') || n.includes('indian premier league') || hasIplTeam) return 'ipl';
   
-  const isDomestic = n.includes('unofficial') || /\b([a-z]+ a)\b/i.test(n) || n.includes('domestic') || n.includes('u19');
+  // Explicit domestic/franchise leagues
+  const domesticLeagues = ['cpl', 'caribbean premier', 'bbl', 'big bash', 'psl', 'super league', 'hundred', 'blast', 'legends', 'global t20', 'sat20', 'ilt20', 'premier league'];
+  const isFranchise = domesticLeagues.some(l => n.includes(l));
+  
+  const isDomestic = n.includes('unofficial') || /\b([a-z]+ a)\b/i.test(n) || n.includes('domestic') || n.includes('u19') || isFranchise;
   if (isDomestic) return 'domestic';
 
-  if (mt === 't20' || mt === 't20i') return 'icc-t20';
-  if (mt === 'odi') return 'icc-odi';
-  if (mt === 'test') return 'icc-test';
+  // Determine format
+  let format = 't20';
+  if (mt === 'odi' || n.includes('odi')) format = 'odi';
+  else if (mt === 'test' || n.includes('test')) format = 'test';
+  else if (mt === 't20' || mt === 't20i' || n.includes('t20')) format = 't20';
+
+  if (format === 't20') return 'icc-t20';
+  if (format === 'odi') return 'icc-odi';
+  if (format === 'test') return 'icc-test';
+  
   return 'domestic';
 }
 
@@ -97,19 +111,31 @@ const INDIA_CITIES = [
 ];
 
 function isIndianVenue(venue) {
-  if (!venue || venue === 'TBA') return true; // Default to India if unknown
+  if (!venue || venue === 'TBA') return false; 
   const v = venue.toLowerCase();
   return INDIA_CITIES.some(city => v.includes(city));
 }
 
 function mapApiMatch(m) {
-  const name = m.name || '';
-  if (isWomensMatch(name)) return null;
-
-  const team1Full = m.teams?.[0] || 'TBD';
-  const team2Full = m.teams?.[1] || 'TBD';
+  const name = m.name || `${m.teamInfo?.[0]?.name || 'TBC'} vs ${m.teamInfo?.[1]?.name || 'TBC'}`;
+  const team1Full = m.teamInfo?.[0]?.name || 'TBC';
+  const team2Full = m.teamInfo?.[1]?.name || 'TBC';
+  
   const category = categorizeMatch(name, m.matchType);
   const venue = m.venue || 'TBA';
+  
+  let localDate = m.date;
+  let localStartTime = '19:30';
+
+  if (m.dateTimeGMT) {
+    try {
+      const d = new Date(m.dateTimeGMT);
+      localDate = d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      localStartTime = d.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour12: false, hour: '2-digit', minute: '2-digit' });
+    } catch (e) {
+      console.warn('Invalid date parsing for', m.dateTimeGMT);
+    }
+  }
 
   return {
     id: m.id,
@@ -117,8 +143,8 @@ function mapApiMatch(m) {
     team1Full,
     team2: m.teamInfo?.[1]?.shortname || getShortName(team2Full),
     team2Full,
-    date: m.date,
-    startTime: m.dateTimeGMT ? new Date(m.dateTimeGMT).toISOString().substring(11, 16) : '19:30',
+    date: localDate,
+    startTime: localStartTime,
     venue,
     status: m.matchStarted ? (m.matchEnded ? 'completed' : 'live') : 'upcoming',
     winner: m.matchEnded ? (m.status || null) : null,
@@ -181,18 +207,31 @@ async function scrapeCricbuzzLive() {
     const t2 = parts[1].split(',')[0].trim();
     const id = 'scrape_' + Buffer.from(matchName).toString('base64').substring(0, 12);
     const statusLower = statusText.toLowerCase();
-    const category = categorizeMatch(matchName, 't20');
+    const category = categorizeMatch(`${matchName} ${t1} ${t2}`, 't20');
     const venue = 'TBA';
+    const isAbroadVenue = !isIndianVenue(venue);
+    const matchType = getMatchFormat(matchName, 't20', category);
+    
+    let inferredTime = '19:30';
+    if (!isAbroadVenue) {
+      if (matchType === 'test') inferredTime = '09:30';
+      else if (matchType === 'odi') inferredTime = '13:30';
+      else inferredTime = '19:30';
+    } else {
+      if (matchType === 'test') inferredTime = '10:00';
+      else if (matchType === 'odi') inferredTime = '14:00';
+      else inferredTime = '20:00';
+    }
 
     matches.push({
       id, team1: getShortName(t1), team1Full: t1,
       team2: getShortName(t2), team2Full: t2,
-      date: new Date().toISOString().split('T')[0], startTime: '19:30', venue,
+      date: new Date().toISOString().split('T')[0], startTime: inferredTime, venue,
       status: statusLower.includes('live') ? 'live' : statusLower.includes('won') ? 'completed' : 'upcoming',
       winner: statusLower.includes('won') ? statusText.split(' won ')[0].trim() : null,
       tournament: 'Live Matches', category,
-      matchType: getMatchFormat(matchName, 't20', category),
-      isAbroad: !isIndianVenue(venue)
+      matchType,
+      isAbroad: isAbroadVenue
     });
   });
 
@@ -321,8 +360,14 @@ async function scrapeCricbuzzSchedule() {
         // Try to get series name from parent structure
         const parentSeries = $(el).closest('div').prevAll('a[href*="/cricket-series/"]').first().text().trim();
         seriesName = parentSeries || matchDesc || 'Upcoming';
+        const matchName = $(el).find('a').attr('title') || '';
+        
+        let matchFormat = 't20';
+        if (matchName.toLowerCase().includes('odi')) matchFormat = 'odi';
+        else if (matchName.toLowerCase().includes('test')) matchFormat = 'test';
 
-        const category = categorizeMatch(seriesName + ' ' + matchDesc, matchType);
+        const category = categorizeMatch(`${seriesName} ${matchName} ${team1Full} ${team2Full}`, matchFormat);
+        const finalMatchType = getMatchFormat(seriesName, matchFormat, category);
 
         // Extract date from closest date header, or use the parsed currentDate
         // Try parsing date from the surrounding context
@@ -340,6 +385,21 @@ async function scrapeCricbuzzSchedule() {
           }
         }
 
+        // Infer a more accurate start time based on match type and location
+        const isAbroadVenue = !isIndianVenue(venue);
+        let inferredTime = '19:30';
+        
+        if (!isAbroadVenue) {
+          if (finalMatchType === 'test') inferredTime = '09:30';
+          else if (finalMatchType === 'odi') inferredTime = '13:30';
+          else inferredTime = '19:30'; // T20s usually 19:30 or 19:00
+        } else {
+          // General guesses for abroad matches to avoid 19:30 clones
+          if (finalMatchType === 'test') inferredTime = '10:00'; // Usually morning local time
+          else if (finalMatchType === 'odi') inferredTime = '14:00';
+          else inferredTime = '20:00';
+        }
+
         allMatches.push({
           id: matchId,
           team1: getShortName(team1Full),
@@ -347,14 +407,14 @@ async function scrapeCricbuzzSchedule() {
           team2: getShortName(team2Full),
           team2Full,
           date: matchDate,
-          startTime: '19:30', // Default; overridden by API if available
+          startTime: inferredTime, // More accurate fallback than generic 19:30
           venue,
           status: 'upcoming',
           winner: null,
           tournament: seriesName,
           category,
-          matchType,
-          isAbroad: !isIndianVenue(venue)
+          matchType: finalMatchType,
+          isAbroad: isAbroadVenue
         });
       });
     } catch (err) {

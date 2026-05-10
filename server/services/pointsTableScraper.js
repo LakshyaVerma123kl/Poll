@@ -144,20 +144,20 @@ async function scrapeFromEspn() {
 }
 
 /**
- * Hardcoded fallback — last known standings
+ * Hardcoded fallback — actual IPL 2024 end-of-season standings
  */
 function getFallbackStandings() {
   return [
-    { rank: 1, team: 'SRH', name: 'Sunrisers Hyderabad', pld: 11, w: 7, l: 4, nr: 0, pts: 14, nrr: '+0.737' },
-    { rank: 2, team: 'PBKS', name: 'Punjab Kings', pld: 10, w: 6, l: 3, nr: 1, pts: 13, nrr: '+0.571' },
-    { rank: 3, team: 'RCB', name: 'Royal Challengers Bengaluru', pld: 9, w: 6, l: 3, nr: 0, pts: 12, nrr: '+1.420' },
-    { rank: 4, team: 'RR', name: 'Rajasthan Royals', pld: 10, w: 6, l: 4, nr: 0, pts: 12, nrr: '+0.510' },
-    { rank: 5, team: 'GT', name: 'Gujarat Titans', pld: 10, w: 6, l: 4, nr: 0, pts: 12, nrr: '-0.147' },
-    { rank: 6, team: 'CSK', name: 'Chennai Super Kings', pld: 10, w: 5, l: 5, nr: 0, pts: 10, nrr: '+0.151' },
-    { rank: 7, team: 'DC', name: 'Delhi Capitals', pld: 10, w: 4, l: 6, nr: 0, pts: 8, nrr: '-0.949' },
-    { rank: 8, team: 'KKR', name: 'Kolkata Knight Riders', pld: 9, w: 3, l: 5, nr: 1, pts: 7, nrr: '-0.539' },
-    { rank: 9, team: 'MI', name: 'Mumbai Indians', pld: 10, w: 3, l: 7, nr: 0, pts: 6, nrr: '-0.649' },
-    { rank: 10, team: 'LSG', name: 'Lucknow Super Giants', pld: 10, w: 2, l: 8, nr: 0, pts: 4, nrr: '-1.106' },
+    { rank: 1, team: 'KKR', name: 'Kolkata Knight Riders', pld: 14, w: 9, l: 3, nr: 2, pts: 20, nrr: '+1.428' },
+    { rank: 2, team: 'SRH', name: 'Sunrisers Hyderabad', pld: 14, w: 8, l: 5, nr: 1, pts: 17, nrr: '+0.414' },
+    { rank: 3, team: 'RR', name: 'Rajasthan Royals', pld: 14, w: 8, l: 5, nr: 1, pts: 17, nrr: '+0.273' },
+    { rank: 4, team: 'RCB', name: 'Royal Challengers Bengaluru', pld: 14, w: 7, l: 7, nr: 0, pts: 14, nrr: '+0.459' },
+    { rank: 5, team: 'CSK', name: 'Chennai Super Kings', pld: 14, w: 7, l: 7, nr: 0, pts: 14, nrr: '+0.392' },
+    { rank: 6, team: 'DC', name: 'Delhi Capitals', pld: 14, w: 7, l: 7, nr: 0, pts: 14, nrr: '-0.377' },
+    { rank: 7, team: 'LSG', name: 'Lucknow Super Giants', pld: 14, w: 7, l: 7, nr: 0, pts: 14, nrr: '-0.667' },
+    { rank: 8, team: 'GT', name: 'Gujarat Titans', pld: 14, w: 5, l: 7, nr: 2, pts: 12, nrr: '-1.063' },
+    { rank: 9, team: 'PBKS', name: 'Punjab Kings', pld: 14, w: 5, l: 9, nr: 0, pts: 10, nrr: '-0.353' },
+    { rank: 10, team: 'MI', name: 'Mumbai Indians', pld: 14, w: 4, l: 10, nr: 0, pts: 8, nrr: '-0.318' },
   ];
 }
 

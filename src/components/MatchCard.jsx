@@ -3,7 +3,6 @@ import { useApp } from '../context/AppProvider';
 import { motion } from 'framer-motion';
 import confetti from 'canvas-confetti';
 import toast from 'react-hot-toast';
-import ConfirmModal from './ConfirmModal';
 import { sounds } from '../utils/audio';
 
 // ── Voting window calculation (shared helper) ──
@@ -49,8 +48,6 @@ export default function MatchCard({ match }) {
   const [windowInfo, setWindowInfo] = useState(null);
   const [aiPrediction, setAiPrediction] = useState(null);
   const [aiLoading, setAiLoading] = useState(false);
-  const [modalOpen, setModalOpen] = useState(false);
-  const [selectedTeam, setSelectedTeam] = useState(null);
   const timerRef = useRef(null);
   
   const userVoteData = votes[match.id]?.[currentUser?.id];
@@ -168,8 +165,11 @@ export default function MatchCard({ match }) {
     }
     if (canVote) {
       sounds.hover();
-      setSelectedTeam(team);
-      setModalOpen(true);
+      const confirmed = window.confirm(`Lock in Prediction?\n\nYou are about to lock in your vote for ${team}. Once confirmed, this action cannot be undone.`);
+      if (confirmed) {
+        sounds.lock();
+        confirmVoteDirect(team);
+      }
     } else {
       sounds.error();
       const msg = windowState === 'waiting'
@@ -179,11 +179,9 @@ export default function MatchCard({ match }) {
     }
   };
 
-  const confirmVote = async () => {
-    if (selectedTeam) {
-      await castVote(match.id, selectedTeam);
-      toast.success(`Successfully locked in vote for ${selectedTeam}!`);
-    }
+  const confirmVoteDirect = async (team) => {
+    await castVote(match.id, team);
+    toast.success(`Successfully locked in vote for ${team}!`);
   };
 
   const handleAIPredict = async () => {
@@ -551,13 +549,6 @@ export default function MatchCard({ match }) {
           )}
         </div>
       )}
-      
-      <ConfirmModal 
-        isOpen={modalOpen} 
-        onClose={() => setModalOpen(false)} 
-        onConfirm={confirmVote} 
-        team={selectedTeam} 
-      />
     </motion.div>
   );
 }
